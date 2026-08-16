@@ -131,6 +131,42 @@ The project uses `faster-whisper`, which uses CTranslate2. Current GPU builds re
 
 ---
 
+## Approximate analysis time
+
+HighlightMiner is **not a real-time scrubber**. The largest part of the initial analysis is normally Whisper transcription; chat parsing and candidate ranking are comparatively cheap.
+
+Runtime depends heavily on the Whisper model, GPU, speech density, VAD behavior, source media, storage speed, and whether the model is already downloaded and cached. The figures below are therefore **rough planning estimates, not benchmark results or guarantees**.
+
+With the current default settings (`large-v3`, `beam_size: 5`, automatic CUDA/FP16 selection when available), an example estimate for a **4 hour 15 minute (255 minute) VOD plus chat** on a high-end desktop with a **Ryzen 9 9950X3D + RTX 3090** is:
+
+| Stage | Approximate time |
+|---|---:|
+| FFmpeg 16 kHz audio extraction | 1–3 min |
+| Audio feature scan | 1–3 min |
+| faster-whisper `large-v3` transcription on GPU | 10–18 min |
+| Chat parsing / burst scoring | seconds to <1 min |
+| Candidate merging / ranking / JSON output | seconds |
+| **Expected total** | **~15–25 min** |
+
+A practical interpretation for that hardware class is:
+
+- **Best case:** ~12–15 minutes
+- **Likely:** ~15–22 minutes
+- **Slower but still plausible:** ~25–35 minutes
+- **45+ minutes:** worth checking whether Whisper fell back to CPU or another bottleneck is present
+
+For a rough first-order estimate on similar hardware and the same settings, use approximately:
+
+```text
+analysis time ≈ VOD duration × 0.06–0.10
+```
+
+So a 255-minute VOD gives roughly **15–26 minutes**. This should be treated only as a planning approximation; performance does not scale perfectly linearly across different streams or systems.
+
+The **first run may take longer** because the selected Whisper model may need to be downloaded and cached. Once analysis artifacts exist, reopening/reviewing the same VOD is much faster because HighlightMiner can reuse cached transcription and feature data instead of repeating the expensive work.
+
+---
+
 ## Quick start — Windows
 
 ### 1. Clone or download the repository
