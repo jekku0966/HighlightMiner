@@ -7,17 +7,19 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
+from .runtime import app_root
+
 # FFmpeg/ffprobe are invoked through their documented CLI. No FFmpeg code is bundled.
 # See ATTRIBUTIONS.md for provenance/licensing notes.
 
 
 def find_executable(name: str) -> str | None:
     """Find an executable bundled locally with HighlightMiner or on system PATH."""
-    project_root = Path(__file__).resolve().parent.parent
+    root = app_root()
     filenames = [f"{name}.exe", name] if os.name == "nt" else [name]
 
-    # Prefer a portable ./bin folder, then the repository/app root.
-    for directory in (project_root / "bin", project_root):
+    # Prefer a portable ./bin folder, then the repository/application root.
+    for directory in (root / "bin", root):
         for filename in filenames:
             candidate = directory / filename
             if candidate.is_file():
@@ -32,7 +34,7 @@ def require_executable(name: str) -> str:
     if path is None:
         raise RuntimeError(
             f"Missing executable: {name}. Put it in HighlightMiner/bin, "
-            "put it beside run.bat, or add it to PATH."
+            "put it beside run.bat / HighlightMiner.exe, or add it to PATH."
         )
     return path
 
@@ -54,7 +56,7 @@ def require_ffmpeg() -> None:
         raise RuntimeError(
             "Missing executable(s): "
             + ", ".join(missing)
-            + ". Put them in HighlightMiner/bin, beside run.bat, or add them to PATH."
+            + ". Put them in HighlightMiner/bin, beside run.bat / HighlightMiner.exe, or add them to PATH."
         )
 
 
