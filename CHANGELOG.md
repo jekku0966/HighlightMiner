@@ -15,6 +15,8 @@ All notable changes to HighlightMiner will be documented here.
 - Updated README setup instructions to match portable FFmpeg support.
 - Added FFmpeg/ffprobe download links, a known-good Windows test build (`descriptinc/ffmpeg-ffprobe-static` `b6.1.2-rc.1`), and version-check instructions.
 - Added approximate analysis-time guidance for long VODs.
+- Documented TwitchDownloader as the recommended companion workflow for obtaining a consistent Twitch VOD + matching JSON chat pair during current testing.
+- Added explicit thanks and attribution for `lay295` and TwitchDownloader contributors while clarifying that TwitchDownloader is not bundled or invoked by HighlightMiner.
 
 ## [0.1.0] - 2026-08-16
 
