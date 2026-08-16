@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import ctypes
+import os
 import subprocess
 import sys
 
 from .media import find_executable
+from .runtime import (
+    configure_windows_cuda_dll_search,
+    portable_cuda_core_dlls,
+)
 
 
 def run_doctor() -> int:
@@ -38,6 +44,24 @@ def run_doctor() -> int:
         except Exception as exc:
             print(f"NVENC check: failed ({exc})")
 
+    cuda_root = configure_windows_cuda_dll_search()
+    cuda_dlls_ok = True
+
+    if os.name == "nt":
+        print(f"Portable CUDA DLL root: {cuda_root}")
+        for dll_name in portable_cuda_core_dlls():
+            dll_path = cuda_root / dll_name
+            if not dll_path.is_file():
+                print(f"  {dll_name}: MISSING")
+                cuda_dlls_ok = False
+                continue
+            try:
+                ctypes.WinDLL(str(dll_path))
+                print(f"  {dll_name}: yes")
+            except OSError as exc:
+                print(f"  {dll_name}: found but could not be loaded ({exc})")
+                cuda_dlls_ok = False
+
     try:
         import ctranslate2
 
@@ -51,6 +75,11 @@ def run_doctor() -> int:
                 f"CUDA compute types: "
                 f"{sorted(ctranslate2.get_supported_compute_types('cuda'))}"
             )
+            if os.name == "nt" and not cuda_dlls_ok:
+                print("GPU Whisper runtime: NOT READY (portable CUDA/cuDNN DLLs missing or unloadable)")
+                ok = False
+            else:
+                print("GPU Whisper runtime: core CUDA/cuDNN DLLs loadable")
 
     except Exception as exc:
         print(f"CTranslate2/CUDA check failed: {exc}")
