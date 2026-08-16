@@ -30,6 +30,9 @@ dependencies = [
 dev = [
   "pytest>=8,<10",
 ]
+packaging = [
+  "pyinstaller>=6.21,<7",
+]
 
 [project.scripts]
 highlightminer = "highlightminer.cli:main"
