@@ -68,7 +68,16 @@ jobs:
         run: |
           $env:STREAMLIT_SERVER_HEADLESS = "true"
           $exe = Resolve-Path ".\dist\HighlightMiner\HighlightMiner.exe"
-          $process = Start-Process -FilePath $exe -WorkingDirectory ".\dist\HighlightMiner" -PassThru
+          $stdoutLog = Join-Path $env:RUNNER_TEMP "highlightminer-ui.stdout.log"
+          $stderrLog = Join-Path $env:RUNNER_TEMP "highlightminer-ui.stderr.log"
+          Remove-Item $stdoutLog, $stderrLog -Force -ErrorAction SilentlyContinue
+
+          $process = Start-Process `
+            -FilePath $exe `
+            -WorkingDirectory ".\dist\HighlightMiner" `
+            -RedirectStandardOutput $stdoutLog `
+            -RedirectStandardError $stderrLog `
+            -PassThru
           $ready = $false
 
           try {
@@ -100,6 +109,11 @@ jobs:
             if (-not $process.HasExited) {
               & taskkill.exe /PID $process.Id /T /F | Out-Null
             }
+
+            Write-Host "--- frozen UI stdout ---"
+            if (Test-Path $stdoutLog) { Get-Content $stdoutLog | Out-Host }
+            Write-Host "--- frozen UI stderr ---"
+            if (Test-Path $stderrLog) { Get-Content $stderrLog | Out-Host }
           }
 
       - name: Upload Windows portable ZIP
