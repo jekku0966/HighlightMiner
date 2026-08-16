@@ -68,12 +68,17 @@ def _run_streamlit_child(app_path: str) -> int:
 
     # Streamlit's normal Click CLI converts environment variables into these
     # flag options before calling bootstrap. A frozen HighlightMiner bypasses
-    # Click, so pass the options explicitly instead. This also guarantees that
-    # a first launch never blocks on Streamlit's email-activation prompt and
-    # opts the embedded application out of Streamlit usage-statistics telemetry.
+    # Click, so pass the options explicitly instead. The packaged UI is bound
+    # only to loopback: it is a local desktop-style application, not a LAN web
+    # service. This also avoids the first-run email prompt and disables
+    # Streamlit's own usage-statistics telemetry.
     flag_options = {
         "server_headless": _env_bool("STREAMLIT_SERVER_HEADLESS", False),
+        "server_address": "127.0.0.1",
+        "server_port": 8501,
         "server_showEmailPrompt": False,
+        "browser_serverAddress": "localhost",
+        "browser_serverPort": 8501,
         "browser_gatherUsageStats": False,
     }
     bootstrap.load_config_options(flag_options=flag_options)
