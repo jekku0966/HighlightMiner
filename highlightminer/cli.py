@@ -38,6 +38,13 @@ def _streamlit_app_path() -> Path:
     return Path(__file__).resolve().with_name("app.py")
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _run_streamlit_child(app_path: str) -> int:
     """Run Streamlit inside a frozen child process.
 
@@ -52,25 +59,28 @@ def _run_streamlit_child(app_path: str) -> int:
         print(f"Bundled Streamlit app not found: {path}", file=sys.stderr, flush=True)
         return 2
 
-    # Preserve the desktop-style behavior of the source launcher. CI overrides
-    # headless=true so no browser is opened there. A packaged application must
-    # never stop for Streamlit's interactive first-run email prompt; it also
-    # disables Streamlit's own usage-statistics collection by default.
-    os.environ.setdefault("STREAMLIT_SERVER_HEADLESS", "false")
-    os.environ.setdefault("STREAMLIT_SERVER_SHOW_EMAIL_PROMPT", "false")
-    os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
-
     from streamlit import config as streamlit_config
     from streamlit.runtime.credentials import check_credentials
     from streamlit.web import bootstrap
 
     main_script_path = os.path.abspath(path)
     streamlit_config._main_script_path = main_script_path
-    bootstrap.load_config_options(flag_options={})
+
+    # Streamlit's normal Click CLI converts environment variables into these
+    # flag options before calling bootstrap. A frozen HighlightMiner bypasses
+    # Click, so pass the options explicitly instead. This also guarantees that
+    # a first launch never blocks on Streamlit's email-activation prompt and
+    # opts the embedded application out of Streamlit usage-statistics telemetry.
+    flag_options = {
+        "server_headless": _env_bool("STREAMLIT_SERVER_HEADLESS", False),
+        "server_showEmailPrompt": False,
+        "browser_gatherUsageStats": False,
+    }
+    bootstrap.load_config_options(flag_options=flag_options)
     check_credentials()
 
     print(f"Starting embedded Streamlit server for {main_script_path}", flush=True)
-    bootstrap.run(main_script_path, False, [], {})
+    bootstrap.run(main_script_path, False, [], flag_options)
     return 0
 
 
