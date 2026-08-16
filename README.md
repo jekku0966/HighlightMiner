@@ -84,6 +84,63 @@ The score is **not** meant to answer “is this objectively funny?” — thankf
 
 ---
 
+## Recommended Twitch input workflow
+
+For Twitch VODs, the **recommended workflow during current HighlightMiner testing is to use [TwitchDownloader](https://github.com/lay295/TwitchDownloader) to obtain both the VOD and its matching chat export**.
+
+This gives different HighlightMiner users a much more consistent pair of source files and makes bug reports/reproduction easier than mixing VODs and chat from unrelated downloaders/exporters.
+
+TwitchDownloader can download Twitch VODs and export the corresponding VOD chat as JSON. Its Windows GUI and cross-platform CLI both support the core download workflow.
+
+### Recommended files
+
+For each Twitch stream, obtain:
+
+```text
+stream.mp4
+stream_chat.json
+```
+
+Then provide both local files to HighlightMiner:
+
+```text
+TwitchDownloader
+├── VOD download      → stream.mp4
+└── Chat JSON export  → stream_chat.json
+                         │
+                         ▼
+                  HighlightMiner
+```
+
+**Use the original JSON chat export**, not a rendered chat video. HighlightMiner wants timestamped message data so it can calculate chat velocity/bursts.
+
+TwitchDownloader releases:
+
+- https://github.com/lay295/TwitchDownloader/releases
+
+Project/documentation:
+
+- https://github.com/lay295/TwitchDownloader
+
+### Why recommend one downloader?
+
+HighlightMiner's chat parser is intentionally permissive, and direct local VODs plus JSON/JSONL/CSV chat remain supported. However, using TwitchDownloader for Twitch input gives us a common baseline while the project is young:
+
+- VOD and chat come from the same Twitch source.
+- Chat timestamps are tied to the VOD timeline.
+- Users can reproduce one another's setup more easily.
+- Parser bugs are easier to diagnose when everyone is not using a different exporter invented in a shed.
+
+TwitchDownloader is **not bundled, imported, or automatically invoked by HighlightMiner**. It is a recommended companion tool.
+
+A future version may optionally integrate **TwitchDownloaderCLI** so a user can paste a VOD ID/URL and have HighlightMiner obtain the VOD + chat automatically. That is deliberately being left for later, after the core scrubber has survived real-world testing.
+
+### Thank you
+
+A specific thank you to **[lay295](https://github.com/lay295) and the TwitchDownloader contributors** for building and maintaining TwitchDownloader. HighlightMiner can focus on highlight detection instead of badly reinventing Twitch downloading because that problem already has a mature open-source solution.
+
+---
+
 ## Requirements
 
 ### Required
@@ -110,18 +167,18 @@ For Windows there are two sensible routes:
    - This release provides separate Windows x64 FFmpeg and ffprobe binaries.
    - The tested setup places them in the HighlightMiner project root as `ffmpeg.exe` and `ffprobe.exe`.
 
-> **Important:** use `ffmpeg` and `ffprobe` from the **same build/release**. Do not mix an FFmpeg binary from one distribution with an unrelated ffprobe binary from another unless you have a specific reason to do so.
+> **Important:** use `ffmpeg` and `ffprobe` from the **same build/release**. Do not mix an FFmpeg binary from one distribution with an unrelated ffprobe binary unless you have a specific reason to do so.
 
-The DescriptInc build above is documented as **tested**, not as a required or preferred forever-version. Newer FFmpeg builds should generally be fine, but until they are exercised with HighlightMiner they should not be described as formally tested.
+The DescriptInc build above is documented as **tested**, not as a required forever-version. Newer FFmpeg builds should generally be fine, but until they are exercised with HighlightMiner they should not be described as formally tested.
 
-You can inspect the binaries you are using with:
+Version checks:
 
 ```powershell
 .\ffmpeg.exe -version
 .\ffprobe.exe -version
 ```
 
-If you keep them under `./bin` instead of the project root:
+If kept under `./bin`:
 
 ```powershell
 .\bin\ffmpeg.exe -version
@@ -136,7 +193,7 @@ HighlightMiner looks for `ffmpeg` and `ffprobe` in this order:
 2. the project root, beside `run.bat`
 3. the operating system `PATH`
 
-On Windows, either of these portable layouts works:
+Either Windows layout works:
 
 ```text
 HighlightMiner/
@@ -159,7 +216,7 @@ HighlightMiner/
 └── ...
 ```
 
-The binaries are intentionally **not committed to this repository**. Obtain FFmpeg from an appropriate FFmpeg distribution/build and keep its license terms in mind.
+The binaries are intentionally **not committed to this repository**.
 
 ### NVIDIA GPU transcription
 
@@ -171,9 +228,9 @@ The project uses `faster-whisper`, which uses CTranslate2. Current GPU builds re
 
 HighlightMiner is **not a real-time scrubber**. The largest part of the initial analysis is normally Whisper transcription; chat parsing and candidate ranking are comparatively cheap.
 
-Runtime depends heavily on the Whisper model, GPU, speech density, VAD behavior, source media, storage speed, and whether the model is already downloaded and cached. The figures below are therefore **rough planning estimates, not benchmark results or guarantees**.
+Runtime depends heavily on the Whisper model, GPU, speech density, VAD behavior, source media, storage speed, and whether the model is already downloaded and cached. These figures are **rough planning estimates, not benchmark results or guarantees**.
 
-With the current default settings (`large-v3`, `beam_size: 5`, automatic CUDA/FP16 selection when available), an example estimate for a **4 hour 15 minute (255 minute) VOD plus chat** on a high-end desktop with a **Ryzen 9 9950X3D + RTX 3090** is:
+With the current defaults (`large-v3`, `beam_size: 5`, automatic CUDA/FP16 selection when available), an example estimate for a **4 hour 15 minute (255 minute) VOD plus chat** on a **Ryzen 9 9950X3D + RTX 3090** is:
 
 | Stage | Approximate time |
 |---|---:|
@@ -184,41 +241,41 @@ With the current default settings (`large-v3`, `beam_size: 5`, automatic CUDA/FP
 | Candidate merging / ranking / JSON output | seconds |
 | **Expected total** | **~15–25 min** |
 
-A practical interpretation for that hardware class is:
+Practical interpretation for that hardware class:
 
 - **Best case:** ~12–15 minutes
 - **Likely:** ~15–22 minutes
 - **Slower but still plausible:** ~25–35 minutes
 - **45+ minutes:** worth checking whether Whisper fell back to CPU or another bottleneck is present
 
-For a rough first-order estimate on similar hardware and the same settings, use approximately:
+Rough first-order estimate on similar hardware/settings:
 
 ```text
 analysis time ≈ VOD duration × 0.06–0.10
 ```
 
-So a 255-minute VOD gives roughly **15–26 minutes**. This should be treated only as a planning approximation; performance does not scale perfectly linearly across different streams or systems.
+A 255-minute VOD therefore gives roughly **15–26 minutes**.
 
-The **first run may take longer** because the selected Whisper model may need to be downloaded and cached. Once analysis artifacts exist, reopening/reviewing the same VOD is much faster because HighlightMiner can reuse cached transcription and feature data instead of repeating the expensive work.
+The **first run may take longer** because the selected Whisper model may need to be downloaded and cached. Reopening/reviewing the same analyzed VOD is much faster because cached transcription/features can be reused.
 
 ---
 
 ## Quick start — Windows
 
-### 1. Clone or download the repository
+### 1. Clone or download HighlightMiner
 
 ```powershell
 git clone https://github.com/jekku0966/HighlightMiner.git
 cd HighlightMiner
 ```
 
-Or download the repository ZIP from GitHub and extract it.
+Or download the repository ZIP and extract it.
 
 ### 2. Add FFmpeg
 
 Download both `ffmpeg` and `ffprobe` from the **same build/release**.
 
-For the currently tested Windows setup, use the DescriptInc static build documented above and place the two binaries in the repository root:
+For the currently tested Windows setup, use the DescriptInc static build documented above and place both binaries in the repository root:
 
 ```text
 HighlightMiner/
@@ -228,12 +285,7 @@ HighlightMiner/
 └── ...
 ```
 
-Alternatively:
-
-- place `ffmpeg.exe` and `ffprobe.exe` in `./bin`, or
-- install a recent FFmpeg build normally and make sure both programs are available on `PATH`.
-
-Then verify the resolver with the `doctor` command in step 4.
+Alternatively place both in `./bin`, or install FFmpeg system-wide.
 
 ### 3. Create the environment and install HighlightMiner
 
@@ -275,7 +327,15 @@ faster-whisper: 1.2.1
 Result: looks good
 ```
 
-### 5. Launch the review app
+### 5. Obtain a Twitch VOD + chat (recommended for Twitch testing)
+
+Use TwitchDownloader to download the VOD and export its matching chat as JSON:
+
+- https://github.com/lay295/TwitchDownloader/releases
+
+For now this is a **manual companion workflow**. HighlightMiner does not launch TwitchDownloader itself.
+
+### 6. Launch HighlightMiner
 
 ```powershell
 .\run.bat
@@ -284,7 +344,7 @@ Result: looks good
 Then enter:
 
 - **VOD path** — local `.mp4`, `.mkv`, etc. readable by FFmpeg
-- **Chat file** — optional JSON / JSONL / NDJSON / CSV
+- **Chat file** — matching TwitchDownloader JSON is recommended for Twitch VODs; other supported JSON/JSONL/CSV formats also work
 - **Work folder** — where analysis artifacts should be cached
 - **Settings** — normally leave this pointing at `settings.json`
 
@@ -335,7 +395,7 @@ Each candidate contains:
 - rank and score
 - suggested start/end time
 - peak timestamp
-- reason(s) it was detected
+- detection reasons
 - audio score
 - transcript score
 - chat score
@@ -346,17 +406,15 @@ In the UI you can:
 - **Keep** a candidate
 - **Reject** it
 - return it to **Unreviewed**
-- adjust the start/end timestamps
+- adjust start/end timestamps
 - add a filename-friendly clip title
 - export all kept clips
 
-Review state is persisted separately in `review.json`, so reopening the UI does not destroy your decisions.
+Review state is persisted in `review.json`, so reopening the UI does not destroy your decisions.
 
 ---
 
 ## Work directory
-
-A typical analysis directory looks like:
 
 ```text
 highlightminer_work/stream-001/
@@ -376,9 +434,11 @@ highlightminer_work/stream-001/
 
 ## Chat input
 
-The parser intentionally accepts several common layouts instead of depending on a single exporter.
+### Recommended Twitch format
 
-Supported containers:
+For Twitch VODs, use the **matching TwitchDownloader JSON chat export** where possible. This is the recommended common format for current HighlightMiner testing and bug reports.
+
+The parser remains intentionally permissive and accepts:
 
 - JSON
 - JSONL / NDJSON
@@ -390,9 +450,11 @@ Recognized timestamp field names include:
 content_offset_seconds
 offset_seconds
 timestamp_seconds
+seconds
 timestamp
 time
 offset
+video_offset
 ```
 
 Recognized message field names include:
@@ -413,15 +475,13 @@ timestamp,message
 13.0,NO WAY
 ```
 
-The loose JSON parser was designed to be compatible with common Twitch-style exports, including TwitchDownloader-like JSON structures, but **HighlightMiner contains no TwitchDownloader source code**.
+HighlightMiner contains **no TwitchDownloader source code**. TwitchDownloader is simply the recommended companion tool/input baseline for Twitch streams.
 
 ---
 
 ## Tuning
 
 Edit `settings.json`.
-
-Important settings include:
 
 | Setting | Effect |
 |---|---|
@@ -500,8 +560,6 @@ This section is intentionally explicit because AI-assisted/vibe-coded projects s
 
 **No complete source file and no substantial code block in HighlightMiner was copied verbatim from another repository.** The application-specific implementation — audio feature extraction, chat normalization/scoring, transcript heuristics, timeline fusion, candidate merging/ranking, review-state format, orchestration, and fallback behavior — was written for HighlightMiner.
 
-The project does call public APIs/CLIs from third-party software:
-
 ### faster-whisper / CTranslate2
 
 Used for local speech-to-text. `highlightminer/transcribe.py` follows the public `WhisperModel(...)` and `model.transcribe(...)` API shape documented by faster-whisper.
@@ -527,9 +585,13 @@ Used as the local review UI.
 
 ### TwitchDownloader
 
-TwitchDownloader is **not a dependency** and no TwitchDownloader code is bundled. It is referenced only because it is a common Twitch chat export source and HighlightMiner attempts to understand common timestamp/message fields used by Twitch-style exports.
+**Recommended companion tool for Twitch VOD + matching JSON chat acquisition.** It is not a HighlightMiner runtime dependency and no TwitchDownloader code is bundled.
 
-- https://github.com/lay295/TwitchDownloader
+- Project: https://github.com/lay295/TwitchDownloader
+- Creator/maintainer: https://github.com/lay295
+- License: MIT
+
+Thank you to **lay295 and all TwitchDownloader contributors** for making the Twitch acquisition side of this workflow possible without HighlightMiner needing to reinvent it.
 
 ### AI assistance
 
@@ -569,6 +631,7 @@ v0.1 currently does **not**:
 - distinguish genuine laughter from every transcript representation
 - automatically learn your taste yet
 - download VODs or chat from Twitch/YouTube itself
+- invoke TwitchDownloader automatically
 - publish clips to social platforms
 
 Treat it as a **candidate finder**, not an omniscient editor.
@@ -577,9 +640,17 @@ Treat it as a **candidate finder**, not an omniscient editor.
 
 ## Roadmap
 
+### Validate v0.1 on real Twitch inputs
+
+Use TwitchDownloader VOD + JSON chat pairs as the common test baseline and fix parser/timing/scoring issues discovered on real streams.
+
 ### v0.2 — learn from Keep/Reject
 
 Persist feature vectors from review decisions and train a small classifier to predict which candidates you personally keep.
+
+### Future — optional TwitchDownloaderCLI integration
+
+Once the analyzer itself is proven, optionally allow HighlightMiner to invoke TwitchDownloaderCLI so a user can provide a Twitch VOD ID/URL and automatically obtain the matching VOD + chat before analysis.
 
 ### v0.3 — multimodal second pass
 
