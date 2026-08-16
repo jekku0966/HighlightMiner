@@ -20,6 +20,7 @@ All notable changes to HighlightMiner will be documented here.
 - Review previews are capped to 1280px width / 30 fps with lightweight encoding and are regenerated only when a candidate's timing changes.
 - The review video player now displays at a compact 640px width while keeping the cached preview file at its existing quality.
 - Replaced deprecated Streamlit `use_container_width=True` arguments with `width="stretch"`.
+- Added a sidebar **Exit HighlightMiner** button. The CLI now supervises the Streamlit child process, accepts a browser-triggered shutdown request, asks the server to stop cleanly, and falls back to terminate/kill only if the normal stop does not complete.
 
 ## [0.1.1] - 2026-08-16
 
