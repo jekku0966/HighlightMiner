@@ -61,16 +61,25 @@ No Streamlit source code is vendored in HighlightMiner.
 
 HighlightMiner does not bundle FFmpeg binaries or FFmpeg source.
 
-## Format/reference compatibility
+## Recommended companion tool / input-format reference
 
 ### TwitchDownloader
 
-- Relationship: compatibility reference only; not a runtime dependency.
-- Purpose: TwitchDownloader is a common source of Twitch chat JSON files, so HighlightMiner's generic chat parser accepts common timestamp/message field shapes that can occur in Twitch-style exports.
-- Source: https://github.com/lay295/TwitchDownloader
+- Creator / maintainer: [lay295](https://github.com/lay295), with contributions from the TwitchDownloader community.
+- Project: https://github.com/lay295/TwitchDownloader
 - Upstream license: MIT.
+- Purpose: download Twitch VODs and matching chat exports in a repeatable way before processing them with HighlightMiner.
+- Recommended HighlightMiner workflow: download the VOD and export the matching chat as **JSON**, then give those two local files to HighlightMiner.
+- Relationship: recommended companion tool and compatibility reference; **not** a HighlightMiner runtime dependency.
+- Current integration status: HighlightMiner does not invoke TwitchDownloader automatically. Direct TwitchDownloaderCLI integration is a possible future improvement after the core HighlightMiner pipeline has been validated on real VODs.
 
-No TwitchDownloader code is vendored or imported.
+HighlightMiner's chat parser intentionally recognizes common Twitch-style fields such as `content_offset_seconds` and nested message text. This makes TwitchDownloader JSON a useful common input target while still allowing other JSON/JSONL/CSV formats.
+
+No TwitchDownloader code is vendored, copied, or imported by HighlightMiner.
+
+### Thank you
+
+A specific thank you to **lay295 and the TwitchDownloader contributors** for building and maintaining a practical open-source tool for downloading Twitch VODs and chat. HighlightMiner does not need to reinvent Twitch downloading because that problem already has a well-established open-source solution.
 
 ## AI-assisted development
 
