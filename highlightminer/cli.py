@@ -43,28 +43,30 @@ def _run_streamlit_child(app_path: str) -> int:
 
     A PyInstaller executable is not a Python interpreter, so a frozen
     HighlightMiner cannot launch ``sys.executable -m streamlit``. The parent
-    instead spawns HighlightMiner.exe again with this private mode, and this
-    child invokes Streamlit's own CLI entry point in-process.
+    instead spawns HighlightMiner.exe again with this private mode. The child
+    reproduces Streamlit's documented CLI startup sequence directly inside the
+    embedded runtime and then enters Streamlit's blocking server bootstrap.
     """
     path = Path(app_path).resolve()
     if not path.is_file():
         print(f"Bundled Streamlit app not found: {path}", file=sys.stderr, flush=True)
         return 2
 
-    # Preserve the desktop-style behavior of the source launcher.
+    # Preserve the desktop-style behavior of the source launcher. CI overrides
+    # this through STREAMLIT_SERVER_HEADLESS=true so no browser is opened there.
     os.environ.setdefault("STREAMLIT_SERVER_HEADLESS", "false")
 
-    from streamlit.web.cli import main as streamlit_main
+    from streamlit import config as streamlit_config
+    from streamlit.runtime.credentials import check_credentials
+    from streamlit.web import bootstrap
 
-    old_argv = sys.argv[:]
-    sys.argv = ["streamlit", "run", str(path)]
-    try:
-        streamlit_main(prog_name="streamlit")
-    except SystemExit as exc:
-        code = exc.code
-        return int(code) if isinstance(code, int) else 0
-    finally:
-        sys.argv = old_argv
+    main_script_path = os.path.abspath(path)
+    streamlit_config._main_script_path = main_script_path
+    bootstrap.load_config_options(flag_options={})
+    check_credentials()
+
+    print(f"Starting embedded Streamlit server for {main_script_path}", flush=True)
+    bootstrap.run(main_script_path, False, [], {})
     return 0
 
 
