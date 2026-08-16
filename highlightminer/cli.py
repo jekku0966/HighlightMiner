@@ -44,8 +44,8 @@ def _run_streamlit_child(app_path: str) -> int:
     A PyInstaller executable is not a Python interpreter, so a frozen
     HighlightMiner cannot launch ``sys.executable -m streamlit``. The parent
     instead spawns HighlightMiner.exe again with this private mode. The child
-    reproduces Streamlit's documented CLI startup sequence directly inside the
-    embedded runtime and then enters Streamlit's blocking server bootstrap.
+    reproduces Streamlit's CLI startup sequence directly inside the embedded
+    runtime and then enters Streamlit's blocking server bootstrap.
     """
     path = Path(app_path).resolve()
     if not path.is_file():
@@ -53,8 +53,12 @@ def _run_streamlit_child(app_path: str) -> int:
         return 2
 
     # Preserve the desktop-style behavior of the source launcher. CI overrides
-    # this through STREAMLIT_SERVER_HEADLESS=true so no browser is opened there.
+    # headless=true so no browser is opened there. A packaged application must
+    # never stop for Streamlit's interactive first-run email prompt; it also
+    # disables Streamlit's own usage-statistics collection by default.
     os.environ.setdefault("STREAMLIT_SERVER_HEADLESS", "false")
+    os.environ.setdefault("STREAMLIT_SERVER_SHOW_EMAIL_PROMPT", "false")
+    os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
 
     from streamlit import config as streamlit_config
     from streamlit.runtime.credentials import check_credentials
