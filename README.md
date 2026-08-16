@@ -92,6 +92,42 @@ The score is **not** meant to answer “is this objectively funny?” — thankf
 - Python **3.10+**
 - FFmpeg + ffprobe, found using one of the supported lookup locations below.
 
+### FFmpeg / ffprobe versions and downloads
+
+HighlightMiner does **not currently enforce one exact FFmpeg version**. It uses long-established FFmpeg/ffprobe CLI features for probing media, extracting PCM audio, checking encoders, and exporting clips.
+
+For Windows there are two sensible routes:
+
+1. **Current/recent FFmpeg build — recommended for new installs**
+   - Official FFmpeg download page: https://ffmpeg.org/download.html
+   - FFmpeg's Windows section links to maintained compiled builds such as:
+     - gyan.dev: https://www.gyan.dev/ffmpeg/builds/
+     - BtbN: https://github.com/BtbN/FFmpeg-Builds/releases
+
+2. **Known-good static build used during HighlightMiner testing**
+   - DescriptInc `ffmpeg-ffprobe-static` release `b6.1.2-rc.1`:
+     https://github.com/descriptinc/ffmpeg-ffprobe-static/releases/tag/b6.1.2-rc.1
+   - This release provides separate Windows x64 FFmpeg and ffprobe binaries.
+   - The tested setup places them in the HighlightMiner project root as `ffmpeg.exe` and `ffprobe.exe`.
+
+> **Important:** use `ffmpeg` and `ffprobe` from the **same build/release**. Do not mix an FFmpeg binary from one distribution with an unrelated ffprobe binary from another unless you have a specific reason to do so.
+
+The DescriptInc build above is documented as **tested**, not as a required or preferred forever-version. Newer FFmpeg builds should generally be fine, but until they are exercised with HighlightMiner they should not be described as formally tested.
+
+You can inspect the binaries you are using with:
+
+```powershell
+.\ffmpeg.exe -version
+.\ffprobe.exe -version
+```
+
+If you keep them under `./bin` instead of the project root:
+
+```powershell
+.\bin\ffmpeg.exe -version
+.\bin\ffprobe.exe -version
+```
+
 ### FFmpeg lookup order
 
 HighlightMiner looks for `ffmpeg` and `ffprobe` in this order:
@@ -180,11 +216,24 @@ Or download the repository ZIP from GitHub and extract it.
 
 ### 2. Add FFmpeg
 
-Either:
+Download both `ffmpeg` and `ffprobe` from the **same build/release**.
+
+For the currently tested Windows setup, use the DescriptInc static build documented above and place the two binaries in the repository root:
+
+```text
+HighlightMiner/
+├── ffmpeg.exe
+├── ffprobe.exe
+├── run.bat
+└── ...
+```
+
+Alternatively:
 
 - place `ffmpeg.exe` and `ffprobe.exe` in `./bin`, or
-- place them beside `run.bat`, or
-- install FFmpeg normally and make sure it is available on `PATH`.
+- install a recent FFmpeg build normally and make sure both programs are available on `PATH`.
+
+Then verify the resolver with the `doctor` command in step 4.
 
 ### 3. Create the environment and install HighlightMiner
 
@@ -466,6 +515,8 @@ Used by `highlightminer/media.py` and `highlightminer/export.py` for media probi
 
 - https://ffmpeg.org/
 - https://ffmpeg.org/ffmpeg.html
+- Windows/download options: https://ffmpeg.org/download.html
+- Known-good HighlightMiner test build: https://github.com/descriptinc/ffmpeg-ffprobe-static/releases/tag/b6.1.2-rc.1
 
 ### Streamlit
 
