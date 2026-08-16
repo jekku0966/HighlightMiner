@@ -13,6 +13,8 @@ All notable changes to HighlightMiner will be documented here.
 - Added `.gitignore` rules for local FFmpeg binaries and generated media.
 - Added `.gitattributes` line-ending rules.
 - Updated README setup instructions to match portable FFmpeg support.
+- Added FFmpeg/ffprobe download links, a known-good Windows test build (`descriptinc/ffmpeg-ffprobe-static` `b6.1.2-rc.1`), and version-check instructions.
+- Added approximate analysis-time guidance for long VODs.
 
 ## [0.1.0] - 2026-08-16
 
