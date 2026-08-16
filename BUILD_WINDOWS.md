@@ -95,6 +95,8 @@ The resulting local ZIP will then carry those files beside `HighlightMiner.exe`.
 
 `.github/workflows/build-windows-exe.yml` builds the frozen Windows application on a GitHub-hosted Windows runner and uploads the generated ZIP as a workflow artifact.
 
+The workflow also verifies that the bundled raw Streamlit script exists, that CTranslate2 and faster-whisper import from the frozen executable, and that the packaged Streamlit server actually responds on localhost before the artifact is accepted.
+
 For licensing/provenance clarity, the CI runner does not automatically download or redistribute external FFmpeg/CUDA/cuDNN binaries. The CI artifact therefore validates the frozen Python application itself; a fully self-contained local package is produced by running `build_windows.ps1` on a machine where the documented portable runtime files are already present.
 
 ## Current build toolchain
