@@ -4,7 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from .media import has_encoder, require_ffmpeg
+from .media import has_encoder, require_executable, require_ffmpeg
 from .util import ensure_dir
 
 
@@ -22,6 +22,7 @@ def export_clip(
     title: str | None = None,
 ) -> Path:
     require_ffmpeg()
+    ffmpeg = require_executable("ffmpeg")
     src = Path(video_path).expanduser().resolve()
     out_dir = ensure_dir(output_dir)
     duration = max(0.1, float(end) - float(start))
@@ -30,7 +31,7 @@ def export_clip(
 
     def command(video_args: list[str]) -> list[str]:
         return [
-            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
             "-ss", f"{float(start):.3f}", "-i", str(src), "-t", f"{duration:.3f}",
             "-map", "0:v:0?", "-map", "0:a:0?",
             *video_args,
@@ -39,11 +40,25 @@ def export_clip(
 
     if has_encoder("h264_nvenc"):
         try:
-            subprocess.run(command(["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19"]), check=True)
+            subprocess.run(
+                command([
+                    "-c:v", "h264_nvenc",
+                    "-preset", "p5",
+                    "-cq", "19",
+                ]),
+                check=True,
+            )
             return out
         except subprocess.CalledProcessError:
-            # An FFmpeg build can advertise NVENC even when no usable NVIDIA device/driver is present.
+            # FFmpeg can advertise NVENC even when no usable NVIDIA device/driver exists.
             out.unlink(missing_ok=True)
 
-    subprocess.run(command(["-c:v", "libx264", "-preset", "medium", "-crf", "18"]), check=True)
+    subprocess.run(
+        command([
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "18",
+        ]),
+        check=True,
+    )
     return out
