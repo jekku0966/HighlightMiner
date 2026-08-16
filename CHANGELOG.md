@@ -10,6 +10,11 @@ All notable changes to HighlightMiner will be documented here.
 - Setup now runs from the repository root, reuses an existing `.venv`, verifies Python 3.10+, installs HighlightMiner, and runs `highlightminer doctor` automatically.
 - Setup now documents the `./bin`, project-root, and system-`PATH` FFmpeg lookup locations when diagnostics need attention.
 - Setup now points Twitch users to TwitchDownloader as the recommended companion workflow for obtaining a matching VOD + JSON chat export.
+- Added portable Windows CUDA 12/cuDNN 9 runtime support using DLLs placed directly beside `run.bat`.
+- `run.bat` and the transcription runtime now explicitly expose the HighlightMiner root to Windows DLL loading.
+- `doctor` now checks `cublas64_12.dll`, `cublasLt64_12.dll`, and `cudnn64_9.dll` so a visible NVIDIA GPU no longer produces a false-green result when the inference runtime is missing.
+- Added `CUDA_SETUP.md` with a direct download link for Purfview's `cuBLAS.and.cuDNN_CUDA12_win_v3.7z` bundle and exact root-folder extraction instructions.
+- Added Git ignore rules for locally downloaded CUDA/cuDNN DLLs and attribution for NVIDIA/Purfview runtime components.
 
 ## [0.1.1] - 2026-08-16
 
