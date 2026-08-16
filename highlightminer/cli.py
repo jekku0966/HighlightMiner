@@ -70,9 +70,11 @@ def _run_streamlit_child(app_path: str) -> int:
     # flag options before calling bootstrap. A frozen HighlightMiner bypasses
     # Click, so pass the options explicitly instead. The packaged UI is bound
     # only to loopback: it is a local desktop-style application, not a LAN web
-    # service. This also avoids the first-run email prompt and disables
-    # Streamlit's own usage-statistics telemetry.
+    # service. Development mode is explicitly disabled for the frozen app. This
+    # also avoids the first-run email prompt and disables Streamlit's own
+    # usage-statistics telemetry.
     flag_options = {
+        "global_developmentMode": False,
         "server_headless": _env_bool("STREAMLIT_SERVER_HEADLESS", False),
         "server_address": "127.0.0.1",
         "server_port": 8501,
