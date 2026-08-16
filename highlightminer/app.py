@@ -9,6 +9,7 @@ from highlightminer.config import Settings
 from highlightminer.export import create_preview_clip, export_clip
 from highlightminer.pipeline import analyze_vod
 from highlightminer.review import load_review, save_review
+from highlightminer.runtime import app_root
 from highlightminer.util import format_time, load_json
 
 # UI uses Streamlit public APIs documented at docs.streamlit.io.
@@ -16,9 +17,12 @@ from highlightminer.util import format_time, load_json
 
 
 def _default_settings_path() -> str:
-    root = Path(__file__).resolve().parent.parent
-    p = root / "settings.json"
+    p = app_root() / "settings.json"
     return str(p) if p.exists() else "settings.json"
+
+
+def _default_work_dir() -> str:
+    return str(app_root() / "highlightminer_work")
 
 
 def _candidate_rows(analysis: dict, review: dict) -> list[dict]:
@@ -46,7 +50,7 @@ def main() -> None:
         st.header("Source")
         video_path = st.text_input("VOD path", value=st.session_state.get("video_path", ""), placeholder=r"D:\VODs\stream.mp4")
         chat_path = st.text_input("Chat file (optional)", value=st.session_state.get("chat_path", ""), placeholder="TwitchDownloader JSON / JSONL / CSV")
-        work_dir = st.text_input("Work folder", value=st.session_state.get("work_dir", "./highlightminer_work"))
+        work_dir = st.text_input("Work folder", value=st.session_state.get("work_dir", _default_work_dir()))
         settings_path = st.text_input("Settings", value=st.session_state.get("settings_path", _default_settings_path()))
 
         if st.button("Analyze VOD", type="primary", width="stretch"):
