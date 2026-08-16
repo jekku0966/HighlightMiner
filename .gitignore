@@ -1,0 +1,45 @@
+# Virtual environments
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# HighlightMiner generated data
+highlightminer_work/
+clips/
+analysis_audio.wav
+audio_features.json
+transcript.json
+transcript_meta.json
+chat_features.json
+analysis.json
+review.json
+
+# Common local media (avoid accidentally pushing a multi-GB VOD)
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.webm
+*.wav
+
+# Local FFmpeg binaries
+bin/ffmpeg.exe
+bin/ffprobe.exe
+ffmpeg.exe
+ffprobe.exe
