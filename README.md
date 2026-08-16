@@ -114,7 +114,7 @@ See the upstream documentation in [Sources, dependencies, and provenance](#sourc
 ### 1. Clone or download the repository
 
 ```powershell
-git clone https://github.com/YOUR-USERNAME/HighlightMiner.git
+git clone https://github.com/jekku0966/HighlightMiner.git
 cd HighlightMiner
 ```
 
@@ -156,27 +156,6 @@ Then enter:
 - **Settings** — normally leave this pointing at `settings.json`
 
 Click **Analyze VOD**.
-
----
-
-## Publish this folder to GitHub
-
-Create an **empty** repository on GitHub. Because this project already contains a README, `.gitignore`, and license, do not ask GitHub to generate those files for the new repository.
-
-From PowerShell inside the HighlightMiner folder:
-
-```powershell
-git init
-git add .
-git commit -m "Initial HighlightMiner v0.1.0"
-git branch -M main
-git remote add origin https://github.com/YOUR-USERNAME/HighlightMiner.git
-git push -u origin main
-```
-
-After pushing, replace `YOUR-USERNAME` in the clone example above with your actual GitHub username.
-
-Before the first push, `git status` should **not** show VODs, WAV analysis files, exported clips, virtual environments, or Python cache files because those are ignored by `.gitignore`.
 
 ---
 
