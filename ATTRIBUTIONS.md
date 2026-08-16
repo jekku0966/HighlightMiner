@@ -49,7 +49,7 @@ No NumPy source code is vendored in HighlightMiner.
 
 No Streamlit source code is vendored in HighlightMiner.
 
-## External executable
+## External executables / runtime libraries
 
 ### FFmpeg / ffprobe
 
@@ -60,6 +60,25 @@ No Streamlit source code is vendored in HighlightMiner.
 - License: FFmpeg's licensing depends on build configuration; see the upstream project.
 
 HighlightMiner does not bundle FFmpeg binaries or FFmpeg source.
+
+### NVIDIA CUDA / cuBLAS / cuDNN
+
+- Purpose: GPU-accelerated CTranslate2 / faster-whisper inference on NVIDIA GPUs.
+- Current faster-whisper requirement: cuBLAS for CUDA 12 and cuDNN 9 for CUDA 12.
+- NVIDIA CUDA: https://developer.nvidia.com/cuda-zone
+- NVIDIA cuBLAS: https://developer.nvidia.com/cublas
+- NVIDIA cuDNN: https://developer.nvidia.com/cudnn
+- License/terms: see NVIDIA's upstream distribution terms.
+
+For the documented portable Windows setup, HighlightMiner points users to the CUDA 12 + cuDNN 9 archive published by **Purfview / whisper-standalone-win**, which is also referenced by faster-whisper's upstream documentation:
+
+- Project: https://github.com/Purfview/whisper-standalone-win
+- Library release: https://github.com/Purfview/whisper-standalone-win/releases/tag/libs
+- Documented bundle: `cuBLAS.and.cuDNN_CUDA12_win_v3.7z`
+
+The DLLs are downloaded separately by the user and placed beside `run.bat`. They are ignored by Git and are **not redistributed by HighlightMiner**.
+
+Thank you to **Purfview** for maintaining the convenient Windows runtime archive used by the portable setup instructions.
 
 ## Recommended companion tool / input-format reference
 
