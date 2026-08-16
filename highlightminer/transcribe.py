@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from .config import Settings
+from .runtime import configure_windows_cuda_dll_search
 from .util import clamp
 
 # Public faster-whisper/CTranslate2 API usage is based on upstream documentation.
@@ -24,6 +25,7 @@ def resolve_device(settings: Settings) -> tuple[str, str]:
         return settings.device, compute
 
     try:
+        configure_windows_cuda_dll_search()
         import ctranslate2
         if ctranslate2.get_cuda_device_count() > 0:
             return "cuda", "float16" if settings.compute_type == "auto" else settings.compute_type
@@ -75,6 +77,8 @@ def score_text(text: str, reaction_phrases: list[str]) -> tuple[float, list[str]
 
 
 def transcribe_audio(audio_path: str | Path, settings: Settings) -> tuple[list[dict], dict]:
+    # On Windows this explicitly exposes CUDA/cuDNN DLLs stored beside run.bat.
+    configure_windows_cuda_dll_search()
     from faster_whisper import WhisperModel
 
     device, compute_type = resolve_device(settings)
