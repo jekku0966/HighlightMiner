@@ -4,11 +4,11 @@ from pathlib import Path
 
 import streamlit as st
 
-from .config import Settings
-from .export import export_clip
-from .pipeline import analyze_vod
-from .review import load_review, save_review
-from .util import format_time, load_json
+from highlightminer.config import Settings
+from highlightminer.export import export_clip
+from highlightminer.pipeline import analyze_vod
+from highlightminer.review import load_review, save_review
+from highlightminer.util import format_time, load_json
 
 # UI uses Streamlit public APIs documented at docs.streamlit.io.
 # No Streamlit source code is vendored; see ATTRIBUTIONS.md.
