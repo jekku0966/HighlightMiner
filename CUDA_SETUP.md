@@ -2,7 +2,7 @@
 
 HighlightMiner uses `faster-whisper` / CTranslate2 for GPU transcription. Current faster-whisper releases require **cuBLAS for CUDA 12** and **cuDNN 9 for CUDA 12** when using recent CTranslate2 versions.
 
-HighlightMiner supports a portable Windows layout: the required runtime DLLs can live directly in the repository root beside `run.bat`. A system-wide CUDA Toolkit installation is not required for this layout.
+HighlightMiner supports a portable Windows layout: the required runtime DLLs can live directly in the repository root beside `run.bat`, or beside `HighlightMiner.exe` in a packaged Windows build. A system-wide CUDA Toolkit installation is not required for this layout.
 
 ## 1. Download the CUDA 12 + cuDNN 9 library bundle
 
@@ -28,9 +28,9 @@ The v3 bundle contains CUDA 12 cuBLAS and cuDNN 9 libraries. Do **not** use the 
 
 ## 2. Extract the archive directly into the HighlightMiner root
 
-Extract the **contents** of the `.7z` archive into the same directory that contains `run.bat`.
+### Source / development checkout
 
-The important part is that files such as these are directly in the project root:
+Extract the **contents** of the `.7z` archive into the same directory that contains `run.bat`.
 
 ```text
 HighlightMiner/
@@ -47,7 +47,26 @@ HighlightMiner/
 └── .venv/
 ```
 
-Do **not** leave them nested like this:
+### Packaged Windows application
+
+For a PyInstaller build, the same DLLs live directly beside the executable:
+
+```text
+HighlightMiner/
+├── HighlightMiner.exe
+├── cublas64_12.dll
+├── cublasLt64_12.dll
+├── cudnn64_9.dll
+├── cudnn_*.dll
+├── ffmpeg.exe
+├── ffprobe.exe
+├── settings.json
+└── _internal/
+```
+
+`build_windows.ps1` automatically copies matching CUDA/cuDNN DLLs from the repository root into `dist/HighlightMiner/` when they are present locally.
+
+Do **not** leave the runtime nested like this:
 
 ```text
 HighlightMiner/
@@ -55,14 +74,20 @@ HighlightMiner/
     └── cublas64_12.dll
 ```
 
-HighlightMiner explicitly adds its repository root to the Windows DLL search path before importing CTranslate2/faster-whisper, so the root-folder layout is intentional.
+HighlightMiner explicitly adds its user-facing application root to the Windows DLL search path before importing CTranslate2/faster-whisper, so the root-folder layout is intentional in both source and packaged modes.
 
 ## 3. Verify the runtime
 
-After extracting the DLLs, run:
+Source checkout:
 
 ```powershell
 .\.venv\Scripts\python.exe -m highlightminer doctor
+```
+
+Packaged application:
+
+```powershell
+.\HighlightMiner.exe doctor
 ```
 
 A healthy NVIDIA setup should include lines similar to:
@@ -80,7 +105,7 @@ If a DLL exists but one of its dependencies cannot be loaded, `doctor` reports t
 
 ## Why these DLLs are not committed to HighlightMiner
 
-The CUDA/cuDNN runtime binaries are third-party NVIDIA software. HighlightMiner does not vendor or redistribute them. Users download them from the upstream bundle and the local DLL files are ignored by Git.
+The CUDA/cuDNN runtime binaries are third-party NVIDIA software. HighlightMiner does not vendor or redistribute them through the source repository. Users obtain them from the upstream bundle, and local DLL files are ignored by Git. The Windows build script only copies runtime files already present on the build machine.
 
 ## Credits
 
