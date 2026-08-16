@@ -21,6 +21,12 @@ All notable changes to HighlightMiner will be documented here.
 - The review video player now displays at a compact 640px width while keeping the cached preview file at its existing quality.
 - Replaced deprecated Streamlit `use_container_width=True` arguments with `width="stretch"`.
 - Added a sidebar **Exit HighlightMiner** button. The CLI now supervises the Streamlit child process, accepts a browser-triggered shutdown request, asks the server to stop cleanly, and falls back to terminate/kill only if the normal stop does not complete.
+- Added frozen-application path handling so `settings.json`, work folders, FFmpeg, and portable CUDA/cuDNN files resolve beside `HighlightMiner.exe` in a PyInstaller build while retaining repository-root behavior in source mode.
+- Added a frozen Streamlit launcher: packaged builds spawn `HighlightMiner.exe` in a private child mode and invoke Streamlit from the embedded Python runtime instead of incorrectly treating the EXE as a Python interpreter.
+- Double-clicking a frozen `HighlightMiner.exe` now launches the UI automatically; packaged CLI subcommands remain available.
+- Added `HighlightMiner.spec`, the `packaging` dependency group, frozen-path tests, and `build_windows.ps1` for reproducible PyInstaller onedir Windows builds.
+- The Windows build script runs tests, freezes the app, copies user-facing files plus locally supplied FFmpeg/CUDA runtime files, smoke-tests the executable, and creates `dist/HighlightMiner-Windows-x64.zip`.
+- Added `BUILD_WINDOWS.md` documenting the portable executable layout, build process, frozen launcher behavior, and third-party runtime policy.
 
 ## [0.1.1] - 2026-08-16
 
