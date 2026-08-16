@@ -1,0 +1,111 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "highlightminer/**"
+      - "tests/**"
+      - "HighlightMiner.spec"
+      - "build_windows.ps1"
+      - "BUILD_WINDOWS.md"
+      - "pyproject.toml"
+      - "settings.json"
+      - ".github/workflows/build-windows-exe.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Build portable application
+        shell: powershell
+        run: .\build_windows.ps1
+
+      - name: Verify bundled Streamlit app file
+        shell: powershell
+        run: |
+          $app = ".\dist\HighlightMiner\_internal\highlightminer\app.py"
+          if (-not (Test-Path $app)) {
+            throw "Bundled Streamlit app.py is missing: $app"
+          }
+          Write-Host "Bundled app.py present: $app"
+
+      - name: Smoke-test frozen dependency imports
+        shell: powershell
+        run: |
+          $output = & .\dist\HighlightMiner\HighlightMiner.exe doctor 2>&1
+          $doctorExit = $LASTEXITCODE
+          $text = $output -join "`n"
+          $output | Out-Host
+
+          if ($text -notmatch "CTranslate2:") {
+            throw "Frozen doctor could not import CTranslate2."
+          }
+          if ($text -notmatch "faster-whisper:") {
+            throw "Frozen doctor could not import faster-whisper."
+          }
+
+          Write-Host "doctor exit code: $doctorExit (missing external FFmpeg/CUDA files are expected on CI)"
+          exit 0
+
+      - name: Smoke-test frozen Streamlit server
+        shell: powershell
+        run: |
+          $env:STREAMLIT_SERVER_HEADLESS = "true"
+          $exe = Resolve-Path ".\dist\HighlightMiner\HighlightMiner.exe"
+          $process = Start-Process -FilePath $exe -WorkingDirectory ".\dist\HighlightMiner" -PassThru
+          $ready = $false
+
+          try {
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 1
+              try {
+                $response = Invoke-WebRequest -Uri "http://127.0.0.1:8501" -UseBasicParsing -TimeoutSec 2
+                if ($response.StatusCode -eq 200) {
+                  $ready = $true
+                  break
+                }
+              }
+              catch {
+                # Server may still be starting.
+              }
+
+              if ($process.HasExited) {
+                throw "HighlightMiner.exe exited before the Streamlit server became ready. Exit code: $($process.ExitCode)"
+              }
+            }
+
+            if (-not $ready) {
+              throw "Frozen Streamlit server did not become ready on port 8501 within 60 seconds."
+            }
+
+            Write-Host "Frozen Streamlit server responded successfully."
+          }
+          finally {
+            if (-not $process.HasExited) {
+              & taskkill.exe /PID $process.Id /T /F | Out-Null
+            }
+          }
+
+      - name: Upload Windows portable ZIP
+        uses: actions/upload-artifact@v7
+        with:
+          name: HighlightMiner-Windows-x64
+          path: dist/HighlightMiner-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
