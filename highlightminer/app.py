@@ -133,7 +133,7 @@ def main() -> None:
                 float(start),
                 preview_end,
             )
-        st.video(str(preview_path))
+        st.video(str(preview_path), width=640)
         st.caption(
             f"Local preview only: {format_time(float(start))} → {format_time(preview_end)}. "
             "The full source VOD is never sent to the browser player."
