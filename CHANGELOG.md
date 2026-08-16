@@ -18,6 +18,7 @@ All notable changes to HighlightMiner will be documented here.
 - Fixed the Streamlit review UI launcher by switching `highlightminer/app.py` to absolute package imports, so `python -m highlightminer ui` no longer fails with `ImportError: attempted relative import with no known parent package`.
 - Review playback now generates and caches a short browser-friendly H.264 preview for the selected candidate instead of handing the full multi-hour source VOD to Streamlit.
 - Review previews are capped to 1280px width / 30 fps with lightweight encoding and are regenerated only when a candidate's timing changes.
+- The review video player now displays at a compact 640px width while keeping the cached preview file at its existing quality.
 - Replaced deprecated Streamlit `use_container_width=True` arguments with `width="stretch"`.
 
 ## [0.1.1] - 2026-08-16
