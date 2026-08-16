@@ -5,7 +5,7 @@ from pathlib import Path
 import streamlit as st
 
 from highlightminer.config import Settings
-from highlightminer.export import export_clip
+from highlightminer.export import create_preview_clip, export_clip
 from highlightminer.pipeline import analyze_vod
 from highlightminer.review import load_review, save_review
 from highlightminer.util import format_time, load_json
@@ -48,7 +48,7 @@ def main() -> None:
         work_dir = st.text_input("Work folder", value=st.session_state.get("work_dir", "./highlightminer_work"))
         settings_path = st.text_input("Settings", value=st.session_state.get("settings_path", _default_settings_path()))
 
-        if st.button("Analyze VOD", type="primary", use_container_width=True):
+        if st.button("Analyze VOD", type="primary", width="stretch"):
             st.session_state.video_path = video_path
             st.session_state.chat_path = chat_path
             st.session_state.work_dir = work_dir
@@ -74,7 +74,7 @@ def main() -> None:
             "Existing analysis.json",
             value=st.session_state.get("analysis_path", str(Path(work_dir) / "analysis.json")),
         )
-        if st.button("Load analysis", use_container_width=True):
+        if st.button("Load analysis", width="stretch"):
             st.session_state.analysis_path = analysis_path_text
             st.rerun()
 
@@ -100,7 +100,7 @@ def main() -> None:
         return
 
     st.subheader("Ranked candidates")
-    st.dataframe(_candidate_rows(analysis, review), use_container_width=True, hide_index=True)
+    st.dataframe(_candidate_rows(analysis, review), width="stretch", hide_index=True)
 
     labels = [f"{c['id']} · {c['score'] * 10:.1f}/10 · {format_time(c['peak_time'])} · {c['reason']}" for c in candidates]
     selected_label = st.selectbox("Review candidate", labels)
@@ -109,7 +109,6 @@ def main() -> None:
     item = review["items"][cand["id"]]
 
     st.subheader(f"{cand['id']} — {cand['reason']}")
-    st.video(analysis["video_path"], start_time=float(item["start"]), end_time=float(item["end"]))
 
     left, right = st.columns(2)
     with left:
@@ -122,6 +121,27 @@ def main() -> None:
             "Clip end (seconds)", min_value=0.1, max_value=float(analysis["duration"]),
             value=float(item["end"]), step=1.0, key=f"end_{cand['id']}"
         )
+
+    preview_end = max(float(end), float(start) + 0.1)
+    preview_dir = analysis_path.parent / ".previews"
+    try:
+        with st.spinner("Preparing lightweight preview…"):
+            preview_path = create_preview_clip(
+                analysis["video_path"],
+                preview_dir,
+                cand["id"],
+                float(start),
+                preview_end,
+            )
+        st.video(str(preview_path))
+        st.caption(
+            f"Local preview only: {format_time(float(start))} → {format_time(preview_end)}. "
+            "The full source VOD is never sent to the browser player."
+        )
+    except Exception as exc:
+        st.error("Could not build the lightweight preview clip.")
+        st.exception(exc)
+
     title = st.text_input("Optional clip title", value=item.get("title", ""), key=f"title_{cand['id']}")
 
     st.caption(
@@ -132,20 +152,20 @@ def main() -> None:
             st.write(cand["transcript"])
 
     b1, b2, b3, b4 = st.columns(4)
-    if b1.button("✅ Keep", use_container_width=True):
-        item.update(status="keep", start=start, end=max(end, start + 0.1), title=title)
+    if b1.button("✅ Keep", width="stretch"):
+        item.update(status="keep", start=start, end=preview_end, title=title)
         save_review(review_path, review)
         st.rerun()
-    if b2.button("❌ Reject", use_container_width=True):
-        item.update(status="reject", start=start, end=max(end, start + 0.1), title=title)
+    if b2.button("❌ Reject", width="stretch"):
+        item.update(status="reject", start=start, end=preview_end, title=title)
         save_review(review_path, review)
         st.rerun()
-    if b3.button("↩ Unreview", use_container_width=True):
-        item.update(status="unreviewed", start=start, end=max(end, start + 0.1), title=title)
+    if b3.button("↩ Unreview", width="stretch"):
+        item.update(status="unreviewed", start=start, end=preview_end, title=title)
         save_review(review_path, review)
         st.rerun()
-    if b4.button("💾 Save timing", use_container_width=True):
-        item.update(start=start, end=max(end, start + 0.1), title=title)
+    if b4.button("💾 Save timing", width="stretch"):
+        item.update(start=start, end=preview_end, title=title)
         save_review(review_path, review)
         st.success("Saved")
 
