@@ -14,7 +14,10 @@ from .doctor import run_doctor
 from .export import export_clip
 from .pipeline import analyze_vod
 from .review import load_review
+from .runtime import app_root, bundled_path, is_frozen
 from .util import load_json
+
+_STREAMLIT_CHILD_ARG = "__streamlit_child__"
 
 
 def _progress(message: str, value: float) -> None:
@@ -25,6 +28,43 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     settings = Settings.from_file(args.settings)
     out = analyze_vod(args.video, args.work_dir, settings, args.chat, _progress)
     print(out)
+    return 0
+
+
+def _streamlit_app_path() -> Path:
+    """Return the raw app.py path Streamlit needs to execute."""
+    if is_frozen():
+        return bundled_path("highlightminer", "app.py")
+    return Path(__file__).resolve().with_name("app.py")
+
+
+def _run_streamlit_child(app_path: str) -> int:
+    """Run Streamlit inside a frozen child process.
+
+    A PyInstaller executable is not a Python interpreter, so a frozen
+    HighlightMiner cannot launch ``sys.executable -m streamlit``. The parent
+    instead spawns HighlightMiner.exe again with this private mode, and this
+    child invokes Streamlit's own CLI entry point in-process.
+    """
+    path = Path(app_path).resolve()
+    if not path.is_file():
+        print(f"Bundled Streamlit app not found: {path}", file=sys.stderr, flush=True)
+        return 2
+
+    # Preserve the desktop-style behavior of the source launcher.
+    os.environ.setdefault("STREAMLIT_SERVER_HEADLESS", "false")
+
+    from streamlit.web.cli import main as streamlit_main
+
+    old_argv = sys.argv[:]
+    sys.argv = ["streamlit", "run", str(path)]
+    try:
+        streamlit_main(prog_name="streamlit")
+    except SystemExit as exc:
+        code = exc.code
+        return int(code) if isinstance(code, int) else 0
+    finally:
+        sys.argv = old_argv
     return 0
 
 
@@ -57,8 +97,11 @@ def _stop_ui_process(process: subprocess.Popen) -> None:
         pass
 
 
-def cmd_ui(_: argparse.Namespace) -> int:
-    app = Path(__file__).resolve().with_name("app.py")
+def cmd_ui(_: argparse.Namespace | None = None) -> int:
+    app = _streamlit_app_path()
+    if not app.is_file():
+        raise RuntimeError(f"Streamlit application file is missing: {app}")
+
     shutdown_file = Path(tempfile.gettempdir()) / f"highlightminer-shutdown-{os.getpid()}.flag"
     shutdown_file.unlink(missing_ok=True)
 
@@ -66,10 +109,16 @@ def cmd_ui(_: argparse.Namespace) -> int:
     env["HIGHLIGHTMINER_SHUTDOWN_FILE"] = str(shutdown_file)
 
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    if is_frozen():
+        command = [sys.executable, _STREAMLIT_CHILD_ARG, str(app)]
+    else:
+        command = [sys.executable, "-m", "streamlit", "run", str(app)]
+
     process = subprocess.Popen(
-        [sys.executable, "-m", "streamlit", "run", str(app)],
+        command,
         env=env,
         creationflags=creationflags,
+        cwd=str(app_root()),
     )
 
     shutdown_requested = False
@@ -121,7 +170,8 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="highlightminer")
+    program_name = "HighlightMiner.exe" if is_frozen() else "highlightminer"
+    p = argparse.ArgumentParser(prog=program_name)
     sub = p.add_subparsers(dest="command", required=True)
 
     doctor = sub.add_parser("doctor", help="Check FFmpeg, faster-whisper, CUDA, and NVENC")
@@ -130,8 +180,8 @@ def build_parser() -> argparse.ArgumentParser:
     analyze = sub.add_parser("analyze", help="Analyze a local VOD")
     analyze.add_argument("video")
     analyze.add_argument("--chat", default=None, help="Optional chat JSON/JSONL/CSV")
-    analyze.add_argument("--work-dir", default="./highlightminer_work")
-    analyze.add_argument("--settings", default=str(Path(__file__).resolve().parent.parent / "settings.json"))
+    analyze.add_argument("--work-dir", default=str(app_root() / "highlightminer_work"))
+    analyze.add_argument("--settings", default=str(app_root() / "settings.json"))
     analyze.set_defaults(func=cmd_analyze)
 
     ui = sub.add_parser("ui", help="Launch the local review UI")
@@ -146,6 +196,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    # Private child mode used only by a frozen HighlightMiner.exe.
+    if len(sys.argv) >= 2 and sys.argv[1] == _STREAMLIT_CHILD_ARG:
+        if len(sys.argv) != 3:
+            raise SystemExit(2)
+        raise SystemExit(_run_streamlit_child(sys.argv[2]))
+
+    # Double-clicking the packaged executable launches the UI. Source-mode CLI
+    # behavior remains unchanged and still requires an explicit subcommand.
+    if is_frozen() and len(sys.argv) == 1:
+        raise SystemExit(cmd_ui())
+
     args = build_parser().parse_args()
     raise SystemExit(args.func(args))
 
