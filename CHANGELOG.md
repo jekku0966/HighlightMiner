@@ -2,6 +2,18 @@
 
 All notable changes to HighlightMiner will be documented here.
 
+## [0.1.1] - 2026-08-16
+
+### Changed
+
+- Added portable FFmpeg/ffprobe discovery.
+- HighlightMiner now checks `./bin`, then the project root, then system `PATH` for FFmpeg executables.
+- Clip export now uses the resolved FFmpeg path instead of assuming `ffmpeg` is globally available.
+- `doctor` now reports the actual resolved local executable paths.
+- Added `.gitignore` rules for local FFmpeg binaries and generated media.
+- Added `.gitattributes` line-ending rules.
+- Updated README setup instructions to match portable FFmpeg support.
+
 ## [0.1.0] - 2026-08-16
 
 ### Added
