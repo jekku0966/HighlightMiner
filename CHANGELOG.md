@@ -2,6 +2,15 @@
 
 All notable changes to HighlightMiner will be documented here.
 
+## [Unreleased]
+
+### Changed
+
+- Updated `setup.ps1` to match the current portable FFmpeg/ffprobe workflow.
+- Setup now runs from the repository root, reuses an existing `.venv`, verifies Python 3.10+, installs HighlightMiner, and runs `highlightminer doctor` automatically.
+- Setup now documents the `./bin`, project-root, and system-`PATH` FFmpeg lookup locations when diagnostics need attention.
+- Setup now points Twitch users to TwitchDownloader as the recommended companion workflow for obtaining a matching VOD + JSON chat export.
+
 ## [0.1.1] - 2026-08-16
 
 ### Changed
