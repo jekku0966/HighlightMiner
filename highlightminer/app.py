@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import streamlit as st
@@ -77,6 +78,18 @@ def main() -> None:
         if st.button("Load analysis", width="stretch"):
             st.session_state.analysis_path = analysis_path_text
             st.rerun()
+
+        shutdown_file = os.environ.get("HIGHLIGHTMINER_SHUTDOWN_FILE")
+        if shutdown_file:
+            st.divider()
+            if st.button("🛑 Exit HighlightMiner", width="stretch"):
+                try:
+                    Path(shutdown_file).write_text("shutdown\n", encoding="utf-8")
+                except OSError as exc:
+                    st.error(f"Could not request shutdown: {exc}")
+                else:
+                    st.info("Shutting down HighlightMiner… You can close this browser tab.")
+                    st.stop()
 
     analysis_path = Path(st.session_state.get("analysis_path", analysis_path_text))
     if not analysis_path.exists():
