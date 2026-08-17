@@ -149,6 +149,7 @@ def cmd_ui(_: argparse.Namespace | None = None) -> int:
         env=env,
         creationflags=creationflags,
         cwd=str(app_root()),
+        shell=False,
     )
 
     shutdown_requested = False
