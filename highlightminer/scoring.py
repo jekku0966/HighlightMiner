@@ -55,7 +55,6 @@ def build_timeline(
         tx = _transcript_at(transcript, t)
         ch = _nearest_feature(chat_features, t) if chat_features else 0.0
         combined = weights.get("audio", 0) * a + weights.get("transcript", 0) * tx + weights.get("chat", 0) * ch
-        # Synergy bonus: multiple independent signals firing is more valuable than one lonely spike.
         active_values = [a, tx] + ([ch] if chat_features else [])
         active = sum(v >= 0.68 for v in active_values)
         if active >= 2:
@@ -79,6 +78,7 @@ def find_candidates(
     settings: Settings,
 ) -> list[dict]:
     timeline = build_timeline(duration, audio_features, transcript, chat_features, settings)
+    weights = settings.normalized_weights(bool(chat_features))
     seeds = [
         x for x in timeline
         if x.combined >= settings.min_candidate_score
@@ -116,7 +116,8 @@ def find_candidates(
         max_tx = max((x.transcript for x in local), default=0.0)
         max_chat = max((x.chat for x in local), default=0.0)
         avg_top = sorted((x.combined for x in local), reverse=True)[:5]
-        score = clamp(0.72 * peak.combined + 0.28 * (sum(avg_top) / max(1, len(avg_top))))
+        top_mean = sum(avg_top) / max(1, len(avg_top))
+        score = clamp(0.72 * peak.combined + 0.28 * top_mean)
 
         reasons = []
         if max_tx >= 0.55:
@@ -127,6 +128,22 @@ def find_candidates(
             reasons.append("chat burst")
         if not reasons:
             reasons.append("combined signal spike")
+
+        signal_count = int(max_audio >= 0.68) + int(max_tx >= 0.68) + int(bool(chat_features) and max_chat >= 0.68)
+        features = {
+            "candidate_duration": round(end - start, 3),
+            "peak_combined": round(float(peak.combined), 4),
+            "top5_combined_mean": round(float(top_mean), 4),
+            "active_signal_count": signal_count,
+            "has_chat": bool(chat_features),
+            "max_audio": round(max_audio, 4),
+            "max_transcript": round(max_tx, 4),
+            "max_chat": round(max_chat, 4),
+            "weight_audio": round(float(weights.get("audio", 0.0)), 6),
+            "weight_transcript": round(float(weights.get("transcript", 0.0)), 6),
+            "weight_chat": round(float(weights.get("chat", 0.0)), 6),
+            "seed_points": len(group),
+        }
 
         candidates.append({
             "id": "",
@@ -142,9 +159,9 @@ def find_candidates(
             "chat_score": round(max_chat, 4),
             "reason": ", ".join(reasons),
             "transcript": _excerpt(transcript, start, end),
+            "features": features,
         })
 
-    # Deduplicate highly overlapping candidates, keeping the strongest.
     candidates.sort(key=lambda c: c["score"], reverse=True)
     kept: list[dict] = []
     for cand in candidates:
