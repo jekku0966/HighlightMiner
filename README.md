@@ -2,17 +2,37 @@
 
 **Local-first VOD highlight detection for streamers and long-form recordings.**
 
-HighlightMiner scans long VODs for moments that are worth reviewing. It combines audio excitement, local Whisper transcription, reaction-heavy speech cues, and optional chat bursts into a ranked candidate list. You keep the good ones, reject the garbage, adjust the timing, and export clips locally.
+HighlightMiner scans long VODs for moments worth reviewing. It combines audio excitement, local Whisper transcription, reaction-heavy speech cues, and optional chat bursts into a ranked candidate list. You keep the good ones, reject the garbage, adjust the timing, and export clips locally.
 
 > **Stable branch:** `main` — v0.1.x
 >
 > HighlightMiner is a candidate finder, not an omniscient comedy detector. Human taste remains inconveniently necessary.
 
-## Interface preview
+## Current interface — `main`
 
-![HighlightMiner UI mockup](docs/highlightminer-ui-mockup.svg)
+![HighlightMiner main branch UX](docs/ux/highlightminer-main-ux-mockup.svg)
 
-The interface uses the repository's current Streamlit theme: dark graphite surfaces, amber/gold primary actions, pale text, and muted blue-grey borders. The mockup is representative rather than a pixel-for-pixel screenshot; the exact contents depend on the VOD and analysis state.
+This mockup represents the **stable file-based UX implemented on `main`**. It follows the repository's current Streamlit theme and layout rather than inventing a separate concept UI.
+
+The stable sidebar works directly with local files and folders:
+
+- VOD picker
+- optional chat picker
+- content/game label
+- work folder
+- settings file
+- **Analyze VOD**
+- **Existing analysis** loader for `analysis.json`
+
+The main review area shows the analysis overview, ranked candidates, local preview, timing controls, Keep/Reject/Unreview actions, transcript/signal information, and export controls.
+
+### Branch distinction
+
+`main` is deliberately simple and folder-driven. Analysis/review state is stored in generated files such as `analysis.json` and `review.json`.
+
+The experimental [`v0.2-dev`](https://github.com/jekku0966/HighlightMiner/tree/v0.2-dev) branch keeps the same visual language but replaces the **Existing analysis** section with **Analysis history** backed by `highlightminer.db`, plus legacy v0.1 import.
+
+The mockup is representative rather than pixel-for-pixel; Streamlit controls exact spacing and the displayed rows depend on local data.
 
 ## What it does
 
@@ -54,17 +74,16 @@ No cloud API is required for the stable v0.1.x workflow.
 - **Portable FFmpeg lookup** — `./bin`, project root, or system `PATH`.
 - **Transparent provenance** — dependencies, external interfaces and AI-assisted development are documented in [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md).
 
-## Current UI flow
-
-The Streamlit app is organized around a simple review workflow:
+## Stable UI flow
 
 1. **Source sidebar** — choose the VOD, optional chat file, content/game label, work folder and settings file.
 2. **Analyze VOD** — extraction, transcription, signal analysis and ranking run locally.
-3. **Analysis overview** — candidate, kept/rejected and detected-language counts.
-4. **Ranked candidates** — score, time range, detection reason and review state.
-5. **Candidate review** — lightweight local preview, editable start/end, title and signal scores.
-6. **Keep / Reject / Unreview** — save the human decision.
-7. **Export** — render all kept clips to the selected output folder.
+3. **Existing analysis** — optionally browse back to an existing `analysis.json` from a prior run.
+4. **Analysis overview** — candidate, kept/rejected and detected-language counts.
+5. **Ranked candidates** — score, time range, detection reason and review state.
+6. **Candidate review** — lightweight local preview, editable start/end, title and signal scores.
+7. **Keep / Reject / Unreview** — save the human decision to the file-based review state.
+8. **Export** — render all kept clips to the selected output folder.
 
 ## Recommended Twitch test workflow
 
@@ -79,7 +98,7 @@ TwitchDownloader
    HighlightMiner
 ```
 
-HighlightMiner does **not** bundle, import or automatically invoke TwitchDownloader. It is simply a useful common input baseline while the project is young.
+HighlightMiner does **not** bundle, import or automatically invoke TwitchDownloader. It is a recommended companion/input baseline while the project is young.
 
 ## Requirements
 
@@ -88,9 +107,10 @@ HighlightMiner does **not** bundle, import or automatically invoke TwitchDownloa
 - Windows convenience scripts are included; the Python project itself is not intentionally Windows-only
 - NVIDIA GPU optional but strongly useful for large Whisper models
 
-For the detailed Windows build/install path, see [`BUILD_WINDOWS.md`](BUILD_WINDOWS.md).
+Detailed setup docs:
 
-For CUDA/CTranslate2 setup and troubleshooting, see [`CUDA_SETUP.md`](CUDA_SETUP.md).
+- [`BUILD_WINDOWS.md`](BUILD_WINDOWS.md)
+- [`CUDA_SETUP.md`](CUDA_SETUP.md)
 
 ## Quick start — Windows
 
