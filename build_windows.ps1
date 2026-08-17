@@ -73,6 +73,7 @@ foreach ($name in @(
     "README.md",
     "V0.2_DEV.md",
     "RERUNS_AND_LEARNING.md",
+    "SETTINGS.md",
     "BUILD_WINDOWS.md",
     "CUDA_SETUP.md",
     "ATTRIBUTIONS.md",
