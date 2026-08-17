@@ -179,8 +179,8 @@ def preference_learning_status(db_path: str | Path | None = None) -> dict[str, A
         "negative_count": training.negative_count,
         "source_count": training.source_count,
         "active_model_id": active[0] if active else None,
-        "active_model_version": active[1].model_version if active else None,
-        "active_blend_weight": active[1].blend_weight if active else 0.0,
+        "active_model_version": active[1].model_version if active else (model.model_version if model else None),
+        "active_blend_weight": active[1].blend_weight if active else (model.blend_weight if model else 0.0),
         "category_adjustments": dict(model.category_adjustments) if model else {},
         "profile_stats": dict(model.profile_stats) if model else {},
     }
