@@ -78,7 +78,7 @@ def _run_h264_encode(
             else:
                 video_args = ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19"]
                 audio_bitrate = "192k"
-            subprocess.run(finish(video_args, audio_bitrate), check=True)
+            subprocess.run(finish(video_args, audio_bitrate), check=True, shell=False)
             return
         except subprocess.CalledProcessError:
             out.unlink(missing_ok=True)
@@ -90,7 +90,7 @@ def _run_h264_encode(
         video_args = ["-c:v", "libx264", "-preset", "medium", "-crf", "18"]
         audio_bitrate = "192k"
 
-    subprocess.run(finish(video_args, audio_bitrate), check=True)
+    subprocess.run(finish(video_args, audio_bitrate), check=True, shell=False)
 
 
 def create_preview_clip(
