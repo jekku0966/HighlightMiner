@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+from .config import Settings
+
+_DEFAULT_REACTION_PHRASES = [
+    "what the fuck", "what the hell", "no way", "holy shit", "oh my god",
+    "are you kidding", "you've got to be kidding", "i can't believe", "that worked",
+    "what is happening", "what just happened", "fuck me", "oh fuck", "shit",
+    "mitä vittua", "mitä helvettiä", "ei saatana", "voi vittu", "ei jumalauta",
+    "mitä tapahtuu", "mitä tapahtui", "ei voi olla",
+]
+
+
+def product_default_settings() -> Settings:
+    """Return a fresh canonical HighlightMiner settings profile.
+
+    This is intentionally code-defined so the in-app Reset defaults action is
+    not affected if a user edits the legacy/interchange settings.json file.
+    """
+    return Settings(
+        whisper_model="large-v3",
+        allow_custom_whisper_model=False,
+        device="auto",
+        compute_type="auto",
+        language=None,
+        beam_size=5,
+        vad_filter=True,
+        audio_window_sec=1.0,
+        audio_hop_sec=0.5,
+        pre_roll_sec=18.0,
+        post_roll_sec=14.0,
+        merge_gap_sec=10.0,
+        max_candidate_sec=75.0,
+        min_candidate_score=0.38,
+        max_candidates=40,
+        weights={"audio": 0.34, "transcript": 0.42, "chat": 0.24},
+        reaction_phrases=list(_DEFAULT_REACTION_PHRASES),
+    )
