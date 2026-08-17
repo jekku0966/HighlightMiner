@@ -31,6 +31,9 @@ All notable changes to HighlightMiner will be documented here.
 - Added a GitHub Actions Windows packaging workflow. A clean Windows runner now validates all unit tests, the PyInstaller build, the bundled Streamlit script, frozen CTranslate2/faster-whisper imports, a live HTTP response from the packaged Streamlit server, and artifact creation before the build is accepted.
 - Added native Windows **Browse** controls for VODs, chat files, work folders, settings, existing `analysis.json` files, and export folders. The picker returns filesystem paths directly instead of uploading large media through the browser.
 - Refreshed the Streamlit UI with a dedicated HighlightMiner dark graphite/amber theme, clearer section labels, and a more app-like header. The supported `.streamlit/config.toml` theme is copied into portable Windows builds automatically.
+- Added a per-VOD **Content / Game** label in Streamlit and a matching CLI `--content` option. The normalized label is stored in `analysis.json` and copied onto each ranked candidate so future preference learning has historical context.
+- Kept clips now export into a category subfolder beneath the selected clips directory, such as `clips/Overwatch 2/`. Blank or legacy analyses fall back to `Unsorted`.
+- Category folder names preserve readable Unicode while sanitizing invalid Windows path characters and reserved device names.
 
 ## [0.1.1] - 2026-08-16
 
