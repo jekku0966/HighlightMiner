@@ -10,6 +10,14 @@ on:
       - "HighlightMiner.spec"
       - "build_windows.ps1"
       - "BUILD_WINDOWS.md"
+      - "README.md"
+      - "V0.2_DEV.md"
+      - "RERUNS_AND_LEARNING.md"
+      - "CUDA_SETUP.md"
+      - "ATTRIBUTIONS.md"
+      - "SECURITY.md"
+      - "CHANGELOG.md"
+      - "LICENSE"
       - "pyproject.toml"
       - "settings.json"
       - ".github/workflows/build-windows-exe.yml"
@@ -45,14 +53,22 @@ jobs:
         shell: powershell
         run: .\build_windows.ps1
 
-      - name: Verify bundled Streamlit app file
+      - name: Verify bundled Streamlit app and user docs
         shell: powershell
         run: |
-          $app = ".\dist\HighlightMiner\_internal\highlightminer\app.py"
-          if (-not (Test-Path $app)) {
-            throw "Bundled Streamlit app.py is missing: $app"
+          $required = @(
+            ".\dist\HighlightMiner\_internal\highlightminer\app.py",
+            ".\dist\HighlightMiner\README.md",
+            ".\dist\HighlightMiner\V0.2_DEV.md",
+            ".\dist\HighlightMiner\RERUNS_AND_LEARNING.md",
+            ".\dist\HighlightMiner\SECURITY.md"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Required packaged file is missing: $path"
+            }
           }
-          Write-Host "Bundled app.py present: $app"
+          Write-Host "Bundled Streamlit app and v0.2 user documentation are present."
 
       - name: Smoke-test frozen dependency imports
         shell: powershell
