@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "highlightminer"
-version = "0.1.2"
-description = "Local-first VOD highlight miner: audio + transcript + chat scoring, review UI, and clip export."
+version = "0.2.0.dev0"
+description = "Local-first VOD highlight miner: audio + transcript + chat scoring, persistent review history, and clip export."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
