@@ -16,13 +16,21 @@ binaries = []
 hiddenimports = []
 
 # These packages use dynamic imports and/or ship frontend/native resources.
-# collect_all keeps the first frozen build deliberately conservative; size can
-# be optimized after the executable has been validated on clean Windows hosts.
-for package in ("streamlit", "faster_whisper", "ctranslate2"):
+# collect_all keeps the frozen build deliberately conservative; size can be
+# optimized after the executable has been validated on clean Windows hosts.
+for package in ("streamlit", "faster_whisper", "ctranslate2", "webview"):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_hidden
+
+# pywebview chooses its Windows renderer dynamically. Keep the modern WebView2
+# backend and pythonnet bridge explicit so the frozen build cannot lose them.
+hiddenimports += [
+    "clr",
+    "webview.platforms.edgechromium",
+    "webview.platforms.winforms",
+]
 
 # De-duplicate hidden imports while preserving deterministic ordering.
 hiddenimports = sorted(set(hiddenimports))
@@ -54,6 +62,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=True,
+    hide_console="hide-early",
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

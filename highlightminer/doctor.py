@@ -11,6 +11,34 @@ from .runtime import (
     portable_cuda_core_dlls,
 )
 
+_WEBVIEW2_CLIENT_ID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+
+
+def _webview2_runtime_version() -> str | None:
+    if os.name != "nt":
+        return None
+
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    locations = (
+        (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{_WEBVIEW2_CLIENT_ID}"),
+        (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\Microsoft\EdgeUpdate\Clients\{_WEBVIEW2_CLIENT_ID}"),
+        (winreg.HKEY_CURRENT_USER, rf"Software\Microsoft\EdgeUpdate\Clients\{_WEBVIEW2_CLIENT_ID}"),
+    )
+    for hive, path in locations:
+        try:
+            with winreg.OpenKey(hive, path) as key:
+                value, _ = winreg.QueryValueEx(key, "pv")
+        except OSError:
+            continue
+        version = str(value or "").strip()
+        if version and version != "0.0.0.0":
+            return version
+    return None
+
 
 def run_doctor() -> int:
     print("HighlightMiner doctor\n")
@@ -43,6 +71,22 @@ def run_doctor() -> int:
 
         except Exception as exc:
             print(f"NVENC check: failed ({exc})")
+
+    if os.name == "nt":
+        try:
+            import webview  # noqa: F401
+
+            print("pywebview desktop shell: yes")
+        except Exception as exc:
+            print(f"pywebview desktop shell: FAILED ({exc})")
+            ok = False
+
+        webview2_version = _webview2_runtime_version()
+        if webview2_version:
+            print(f"WebView2 Runtime: {webview2_version}")
+        else:
+            print("WebView2 Runtime: MISSING")
+            ok = False
 
     cuda_root = configure_windows_cuda_dll_search()
     cuda_dlls_ok = True

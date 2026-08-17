@@ -157,6 +157,13 @@ if ($LASTEXITCODE -ne 0) {
     throw "HighlightMiner.exe failed its --help smoke test."
 }
 
+Write-Host ""
+Write-Host "Smoke-testing embedded desktop runtime imports..."
+& $exePath __desktop_probe__
+if ($LASTEXITCODE -ne 0) {
+    throw "HighlightMiner.exe could not import the packaged pywebview/WebView2 backend."
+}
+
 if ($ffmpegCopied -and $missingCoreCuda.Count -eq 0) {
     Write-Host ""
     Write-Host "Running packaged environment check..."
@@ -189,4 +196,4 @@ if (-not $SkipZip) {
     Write-Host "Checksum file:     $checksumPath"
 }
 Write-Host ""
-Write-Host "Double-click HighlightMiner.exe to launch the UI."
+Write-Host "Double-click HighlightMiner.exe to launch the embedded desktop UI."

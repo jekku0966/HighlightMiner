@@ -4,6 +4,23 @@ All notable changes to HighlightMiner will be documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Added a native Windows desktop shell for `v0.2-dev` using pywebview + Microsoft Edge WebView2. The local Streamlit backend now runs headlessly and is presented inside the HighlightMiner application window instead of opening a normal browser tab.
+- Added `highlightminer/desktop.py` for UI-mode resolution, Streamlit readiness checks, native-window lifecycle handling, browser fallback, and packaged desktop-runtime probing.
+- Added `HighlightMiner.exe ui --browser` as an explicit troubleshooting/development fallback.
+- Added Windows `doctor` checks for pywebview importability and the installed WebView2 Runtime version.
+- Added desktop-shell unit tests and a frozen `__desktop_probe__` packaging smoke test.
+
+### Changed
+
+- Closing the native HighlightMiner window now shuts down the child Streamlit server and exits the application cleanly; the existing in-app Exit button closes both as well.
+- The packaged Streamlit server is now always headless and uses `127.0.0.1` consistently for server/browser addressing.
+- PyInstaller now collects pywebview resources, explicitly keeps the WinForms/EdgeChromium/pythonnet imports, and uses `hide_console="hide-early"` so double-click launches hide their owned console while terminal-launched CLI commands retain output.
+- Windows packaging now depends on `pywebview>=6.2.1,<7` and requires the system Microsoft Edge WebView2 Runtime for the embedded desktop UI.
+- GitHub Actions now verifies the frozen pywebview/WebView2 backend imports and uses `HIGHLIGHTMINER_UI_MODE=server` for non-interactive Streamlit HTTP smoke testing.
+- Updated README, Windows build, v0.2 architecture, security, and attribution documentation for the embedded desktop architecture.
+
 ## [0.1.2] - 2026-08-17
 
 ### Changed
@@ -26,14 +43,14 @@ All notable changes to HighlightMiner will be documented here.
 - Added frozen-application path handling so `settings.json`, work folders, FFmpeg, and portable CUDA/cuDNN files resolve beside `HighlightMiner.exe` in a PyInstaller build while retaining repository-root behavior in source mode.
 - Added a frozen Streamlit launcher: packaged builds spawn `HighlightMiner.exe` in a private child mode and invoke Streamlit from the embedded Python runtime instead of incorrectly treating the EXE as a Python interpreter.
 - Double-clicking a frozen `HighlightMiner.exe` now launches the UI automatically; packaged CLI subcommands remain available.
-- The packaged Streamlit server now skips Streamlit's first-run email prompt, disables Streamlit usage-statistics telemetry, runs with development mode disabled, and binds only to `127.0.0.1:8501`.
+- The packaged Streamlit server skips Streamlit's first-run email prompt, disables Streamlit usage-statistics telemetry, runs with development mode disabled, and binds only to `127.0.0.1:8501`.
 - Added `HighlightMiner.spec`, the `packaging` dependency group, frozen-path tests, and `build_windows.ps1` for reproducible PyInstaller onedir Windows builds.
 - The Windows build script runs tests, freezes the app, copies user-facing files plus locally supplied FFmpeg/CUDA runtime files, smoke-tests the executable, and creates a versioned `dist/HighlightMiner-v<version>-windows-x64.zip` archive.
 - The project version in `pyproject.toml` is now the source of truth for Windows release archive naming.
 - Windows release packaging explicitly validates the x64 architecture rather than silently producing a misleading package name on another architecture.
 - GitHub Actions reads the same project version and publishes a matching version/platform/architecture-named build artifact.
 - Added `BUILD_WINDOWS.md` documenting the portable executable layout, build process, frozen launcher behavior, third-party runtime policy, and release archive naming convention.
-- Added a GitHub Actions Windows packaging workflow. A clean Windows runner now validates all unit tests, the PyInstaller build, the bundled Streamlit script, frozen CTranslate2/faster-whisper imports, a live HTTP response from the packaged Streamlit server, and artifact creation before the build is accepted.
+- Added a GitHub Actions Windows packaging workflow. A clean Windows runner validates unit tests, the PyInstaller build, the bundled Streamlit script, frozen CTranslate2/faster-whisper imports, a live HTTP response from the packaged Streamlit server, and artifact creation before the build is accepted.
 - Added native Windows **Browse** controls for VODs, chat files, work folders, settings, existing `analysis.json` files, and export folders. The picker returns filesystem paths directly instead of uploading large media through the browser.
 - Refreshed the Streamlit UI with a dedicated HighlightMiner dark graphite/amber theme, clearer section labels, and a more app-like header. The supported `.streamlit/config.toml` theme is copied into portable Windows builds automatically.
 - Added a per-VOD **Content / Game** label in Streamlit and a matching CLI `--content` option. The normalized label is stored in `analysis.json` and copied onto each ranked candidate so future preference learning has historical context.

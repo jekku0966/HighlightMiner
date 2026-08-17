@@ -24,6 +24,7 @@ dependencies = [
   "numpy>=1.26,<3",
   "faster-whisper>=1.2.1,<2",
   "streamlit>=1.36,<2",
+  "pywebview>=6.2.1,<7; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]

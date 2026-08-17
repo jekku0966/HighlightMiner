@@ -69,12 +69,21 @@ jobs:
             throw "Frozen doctor could not import faster-whisper."
           }
 
+          $desktop = & .\dist\HighlightMiner\HighlightMiner.exe __desktop_probe__ 2>&1
+          $desktopExit = $LASTEXITCODE
+          $desktopText = $desktop -join "`n"
+          $desktop | Out-Host
+          if ($desktopExit -ne 0 -or $desktopText -notmatch "pywebview desktop shell: importable") {
+            throw "Frozen executable could not import the pywebview/WebView2 desktop backend."
+          }
+
           Write-Host "doctor exit code: $doctorExit (missing external FFmpeg/CUDA files are expected on CI)"
           exit 0
 
       - name: Smoke-test frozen Streamlit server
         shell: powershell
         run: |
+          $env:HIGHLIGHTMINER_UI_MODE = "server"
           $env:STREAMLIT_SERVER_HEADLESS = "true"
           $exe = Resolve-Path ".\dist\HighlightMiner\HighlightMiner.exe"
           $stdoutLog = Join-Path $env:RUNNER_TEMP "highlightminer-ui.stdout.log"
@@ -112,7 +121,7 @@ jobs:
               throw "Frozen Streamlit server did not become ready on port 8501 within 60 seconds."
             }
 
-            Write-Host "Frozen Streamlit server responded successfully."
+            Write-Host "Frozen headless Streamlit backend responded successfully."
           }
           finally {
             if (-not $process.HasExited) {
