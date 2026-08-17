@@ -1,6 +1,6 @@
 # Same-VOD reruns and learning data
 
-`v0.2-dev` separates a physical VOD (**source**) from each **analysis run**. Re-analyzing the same source creates a new run instead of overwriting history.
+`v0.2-learning` keeps the `v0.2-dev` source/run architecture and adds an experimental personal reranker. Re-analyzing the same physical VOD creates a new run instead of overwriting history.
 
 ```text
 source VOD
@@ -33,9 +33,9 @@ CLI full-reprocess equivalent:
 HighlightMiner.exe analyze "D:\VODs\stream.mp4" --no-reuse
 ```
 
-## Learning-ready review data
+## Learning labels and retained context
 
-The review states map to future supervised learning as follows:
+Review states map to supervised learning as follows:
 
 | State | Label |
 |---|---:|
@@ -45,9 +45,36 @@ The review states map to future supervised learning as follows:
 
 **Unreviewed is not treated as Reject.** Not having judged a candidate is not negative preference evidence.
 
-Candidate rows retain the original heuristic rank/score, audio/transcript/chat scores, combined-signal statistics, active-signal count, candidate duration, chat availability, scoring weights, content/game label, source/run IDs, algorithm version, and feature-schema version.
+Candidate rows retain the original heuristic rank/score, audio/transcript/chat scores, combined-signal statistics, active-signal count, candidate duration, chat availability, effective scoring weights, content/game label, source/run IDs, algorithm version, and feature-schema version.
 
-The review layer also retains user-adjusted timing, title edits, review timestamps, meaningful review changes in `review_events`, and every export in `exports`. This preserves stronger behavioral signals for later experimentation without retraining Whisper.
+Every new learning-branch run also snapshots:
+
+- the human-friendly mining profile (`Balanced`, `Reaction-heavy`, `Chat-heavy`, `Audio-heavy`, or `Custom`);
+- the actual normalized signal weights used by the detector;
+- content/game category context;
+- when active, the model ID/version, base rank/score, personal keep probability, category-adjustment metadata, learner blend weight, and final ranking score.
+
+The review layer also retains user-adjusted timing, title edits, review timestamps, meaningful review changes in `review_events`, and every export in `exports`.
+
+## Reruns and training balance
+
+Repeated analyses of the same source are useful for comparing settings and learner versions, but they must not dominate preference training simply because the same VOD was rerun many times. The global learner source-balances examples during fitting and requires labels from multiple source VODs before activation.
+
+Category-specific context is also gated across multiple source VODs. A category does not receive its own calibration adjustment from a handful of clips on one stream.
+
+## Personal reranker behavior
+
+The heuristic detector remains the candidate generator and safety net. Learning only changes the order of plausible candidates on **new** analysis runs; existing runs are never rewritten.
+
+The global learner activates after at least 30 labeled candidates, at least 8 Keep + 8 Reject, and at least 3 source VODs. Influence starts at 10% and is capped at 35%.
+
+Category/game context is a conservative calibration layer on top of the global personal probability. It requires at least 20 category labels, at least 5 Keep + 5 Reject, and at least 2 source VODs. Blank/`Unsorted` content falls back to the global learner.
+
+Mining-profile context is handled differently: the **numeric weights** are model features, while the profile name is retained as provenance/statistics rather than a direct categorical bonus. This avoids teaching the model a shortcut such as “Reaction-heavy always means Keep.”
+
+If learner preparation or prediction errors, analysis fails open to the original heuristic ranking.
+
+See `LEARNING.md` for the full model/activation contract.
 
 Current dataset counts are available with:
 
@@ -66,7 +93,3 @@ H003_clutch_3.mp4
 ```
 
 Each export is recorded in SQLite.
-
-## Current status
-
-The **dataset plumbing is implemented; the preference learner itself is not**. The first learner should train on explicit Keep/Reject examples only. Unreviewed data remains available for statistics/calibration, and repeated runs of the same source should be deduplicated or grouped during training so reruns do not accidentally overweight one VOD.
