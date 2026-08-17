@@ -48,6 +48,18 @@ The Settings page can:
 
 Settings imports retain the existing security guardrails: local-file validation, JSON extension/size limits, numeric ranges, and explicit opt-in for custom Whisper model repositories.
 
+## CLI behavior
+
+`HighlightMiner.exe analyze` and `python -m highlightminer analyze` use the active settings profile from the selected SQLite database by default, matching the desktop app.
+
+An explicit JSON profile can still be used as a one-run override:
+
+```powershell
+HighlightMiner.exe analyze "D:\VODs\stream.mp4" --settings "D:\Profiles\chat-heavy.json"
+```
+
+The override is stored in that analysis run's settings snapshot but does not replace the active app profile.
+
 ## Reruns and learning
 
 Every analysis run stores its own settings snapshot. This means the same VOD can be rerun with different weights or thresholds without rewriting history.
