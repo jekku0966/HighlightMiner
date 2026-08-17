@@ -1,8 +1,9 @@
-# ⛏️ HighlightMiner v0.2-dev
+# ⛏️ HighlightMiner v0.2-learning
 
-**Experimental local-first VOD highlight detection with SQLite history, same-VOD reruns, in-app settings, a native Windows shell, and future preference learning in mind.**
+**Experimental local-first VOD highlight detection with SQLite history, same-VOD reruns, in-app settings, a native Windows shell, and conservative personal preference reranking.**
 
-> Development branch: `v0.2-dev` — version `0.2.0.dev0`  
+> Experimental learning branch: `v0.2-learning` — version `0.2.0.dev0`  
+> Integration base: `v0.2-dev`  
 > Stable/simple v0.1.x remains on `main`.
 
 HighlightMiner analyzes long VODs using audio excitement, local Whisper transcription, reaction-heavy speech cues, and optional chat bursts, then presents ranked candidate moments for human review.
@@ -19,7 +20,7 @@ HighlightMiner.exe ui --browser
 
 ## SQLite-backed application state
 
-v0.2 keeps structured state in `highlightminer.db`: analyses, candidates, transcript/audio/chat features, source/run history, Keep/Reject/Unreviewed reviews, timing/title edits, review events, export history, and the active desktop-app settings profile.
+v0.2 keeps structured state in `highlightminer.db`: analyses, candidates, transcript/audio/chat features, source/run history, Keep/Reject/Unreviewed reviews, timing/title edits, review events, export history, active desktop-app settings, and experimental preference models.
 
 ```text
 HighlightMiner/
@@ -73,23 +74,33 @@ HighlightMiner.exe analyze "D:\VODs\stream.mp4" --no-reuse
 
 See `RERUNS_AND_LEARNING.md` for source identity/cache rules.
 
-## Learning-ready review history
+## Personal preference learning
 
-Review semantics are explicit:
+Review semantics remain explicit:
 
-| State | Future label |
+| State | Learning label |
 |---|---:|
 | Keep | `1` positive |
 | Reject | `0` negative |
 | Unreviewed | unlabeled |
 
-Unreviewed is **not** silently treated as Reject. Candidate feature snapshots, original ranking scores, content/game labels, run/source IDs, settings snapshots, review changes, timing edits, titles, and exports are retained for the future preference reranker.
+The heuristic detector still creates the candidate pool and its base score is never overwritten. The learner is a conservative NumPy logistic-regression reranker: it starts only after 30 labeled candidates, at least 8 examples of each class, and labels from at least 3 source VODs. Its influence begins at 10% and is capped at 35%, so the heuristic always remains the majority of the final score.
+
+### Category / game context
+
+`Content / Game` is learning context. The global model works everywhere; category-specific calibration only activates after a category has at least 20 labels, at least 5 Keep + 5 Reject, and at least 2 source VODs. `Unsorted` stays on the global model.
+
+### Mining-profile context
+
+Every new run records the mining profile (`Balanced`, `Reaction-heavy`, `Chat-heavy`, `Audio-heavy`, or `Custom`). The learner uses the actual normalized Audio / Transcript / Chat weights as numeric model inputs and keeps the profile name as provenance/diagnostics. It does not give a blind categorical bonus to a preset name.
+
+The review UI can show Base / Personal / Final ranking scores, current learner influence, active category context, and mining-profile coverage. Learner failures fail open to the base heuristic ranking.
 
 ```powershell
 HighlightMiner.exe learning-stats
 ```
 
-The dataset plumbing exists; the actual personal preference learner is not implemented yet.
+See `LEARNING.md` for the model, activation gates, category/profile rules, and stored ranking provenance.
 
 ## Review and export
 
@@ -110,7 +121,7 @@ Use **Import v0.1 analysis.json** in the sidebar. HighlightMiner migrates the an
 
 ## Security posture
 
-The dev branch includes local-file validation, automatic UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, and SHA-256 release checksums.
+The dev branches include local-file validation, automatic UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, and SHA-256 release checksums.
 
 The sampled VOD fingerprint is for source identity, not security/integrity verification. See `SECURITY.md`.
 
@@ -129,7 +140,7 @@ For Twitch VOD/chat acquisition, TwitchDownloader is the recommended companion t
 ```powershell
 git clone https://github.com/jekku0966/HighlightMiner.git
 cd HighlightMiner
-git switch v0.2-dev
+git switch v0.2-learning
 Set-ExecutionPolicy -Scope Process Bypass
 .\setup.ps1
 .\run.bat
@@ -144,9 +155,10 @@ Tests:
 
 ## Documentation
 
+- `LEARNING.md` — experimental preference model, category/profile context, activation gates
 - `SETTINGS.md` — in-app settings, presets, import/export
-- `V0.2_DEV.md` — architecture/status
-- `RERUNS_AND_LEARNING.md` — rerun/cache/learning contract
+- `V0.2_DEV.md` — v0.2 base architecture/status
+- `RERUNS_AND_LEARNING.md` — rerun/cache/learning-data contract
 - `BUILD_WINDOWS.md` — Windows build/package notes
 - `CUDA_SETUP.md` — CUDA/CTranslate2 setup
 - `SECURITY.md` — threat model/security notes
