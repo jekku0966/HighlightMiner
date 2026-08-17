@@ -8,13 +8,33 @@
 
 HighlightMiner analyzes long VODs using audio excitement, local Whisper transcription, reaction-heavy speech cues and optional chat bursts, then presents ranked candidate moments for human review.
 
-## Current interface preview
+## Current interface — `v0.2-dev`
 
-![HighlightMiner UI mockup](docs/highlightminer-ui-mockup.svg)
+![HighlightMiner v0.2-dev UX](docs/ux/highlightminer-v0.2-dev-ux-mockup.svg)
 
-The mockup follows the current Streamlit layout and repository theme: `#0D1117` main background, `#111821` sidebar, `#171E27` / `#1B2531` secondary surfaces, amber `#E8A63A` primary actions, pale `#EEF2F6` text and `#303A46` borders.
+This mockup represents the **current experimental UX implemented on `v0.2-dev`**. It uses the same Streamlit theme as `main`, but the sidebar/state model is intentionally different.
 
-It is representative rather than a pixel-for-pixel screenshot; actual rows, scores, paths and analysis history depend on local data.
+The development sidebar includes:
+
+- VOD picker
+- optional chat picker
+- content/game label
+- work folder
+- settings file
+- **Analyze VOD**
+- **Analysis history** loaded from `highlightminer.db`
+- **Load selected analysis**
+- legacy v0.1 analysis import
+
+The main review area still provides the familiar overview, ranked candidate table, lightweight preview, timing controls, Keep/Reject/Unreview actions, transcript/signal information, and export controls.
+
+### Branch distinction
+
+Unlike stable `main`, `v0.2-dev` **does not make the user hunt for `analysis.json` to reopen prior work**. Structured state lives in SQLite and recent analyses are surfaced directly in the sidebar.
+
+Stable `main` remains file-based and uses an **Existing analysis** loader instead. Its UX mockup lives on the [`main` branch](https://github.com/jekku0966/HighlightMiner/tree/main).
+
+The mockup is representative rather than pixel-for-pixel; Streamlit controls exact spacing and displayed rows/history depend on local data.
 
 ## What changed in v0.2
 
@@ -90,7 +110,7 @@ The branch is designed to make these later features practical:
 - maintain a real local history instead of isolated analysis folders;
 - improve validation and packaged-app security before broader distribution.
 
-For the architecture notes, see [`V0.2_DEV.md`](V0.2_DEV.md).
+For architecture/status notes, see [`V0.2_DEV.md`](V0.2_DEV.md).
 
 ## Security hardening in this branch
 
