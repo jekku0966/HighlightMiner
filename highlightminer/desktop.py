@@ -8,7 +8,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 UI_HOST = "127.0.0.1"
 UI_PORT = 8501
@@ -75,7 +75,13 @@ def desktop_runtime_probe() -> None:
     import webview.platforms.winforms  # noqa: F401
 
 
-def run_desktop_shell(process: Any, shutdown_file: Path, *, url: str = UI_URL) -> None:
+def run_desktop_shell(
+    process: Any,
+    shutdown_file: Path,
+    *,
+    url: str = UI_URL,
+    stop_backend: Callable[[], None] | None = None,
+) -> None:
     """Display Streamlit inside a native Windows pywebview/WebView2 window."""
     if os.name != "nt":
         raise RuntimeError("The native HighlightMiner desktop shell is currently Windows-only.")
@@ -98,14 +104,59 @@ def run_desktop_shell(process: Any, shutdown_file: Path, *, url: str = UI_URL) -
     )
 
     stop_watcher = threading.Event()
+    shutdown_started = threading.Event()
+    backend_stopped = threading.Event()
+    shutdown_lock = threading.Lock()
+
+    def finish_orderly_shutdown() -> None:
+        try:
+            if stop_backend is not None and process.poll() is None:
+                stop_backend()
+        finally:
+            backend_stopped.set()
+            try:
+                window.destroy()
+            except Exception:
+                pass
+
+    def request_orderly_shutdown() -> None:
+        with shutdown_lock:
+            if shutdown_started.is_set():
+                return
+            shutdown_started.set()
+            try:
+                shutdown_file.touch()
+            except OSError:
+                pass
+            threading.Thread(
+                target=finish_orderly_shutdown,
+                name="HighlightMiner-ui-stop",
+                daemon=True,
+            ).start()
+
+    def on_closing() -> bool | None:
+        # Keep WebView2 alive until Streamlit has stopped so Windows does not
+        # report a reset connection while asyncio is tearing down its socket.
+        if backend_stopped.is_set() or process.poll() is not None:
+            return None
+        request_orderly_shutdown()
+        return False
+
+    window.events.closing += on_closing
 
     def watch_backend() -> None:
         while not stop_watcher.wait(0.25):
-            if shutdown_file.exists() or process.poll() is not None:
+            if process.poll() is not None:
+                if shutdown_started.is_set():
+                    return
+                backend_stopped.set()
                 try:
                     window.destroy()
                 except Exception:
                     pass
+                return
+            if shutdown_file.exists():
+                request_orderly_shutdown()
                 return
 
     watcher = threading.Thread(target=watch_backend, name="HighlightMiner-ui-watch", daemon=True)
