@@ -14,6 +14,16 @@ def safe_name(text: str) -> str:
     return text[:80] or "highlight"
 
 
+def _non_overwriting_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    for index in range(2, 10000):
+        candidate = path.with_name(f"{path.stem}_{index}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"Could not find a free export filename beside {path}")
+
+
 def _run_h264_encode(
     ffmpeg: str,
     src: Path,
@@ -42,12 +52,7 @@ def _run_h264_encode(
     ]
 
     if preview:
-        # The review UI must never push a multi-hour source VOD into Streamlit.
-        # Render only the requested candidate window at a browser-friendly size.
-        common += [
-            "-vf",
-            "scale='min(1280,iw)':-2,fps=30",
-        ]
+        common += ["-vf", "scale='min(1280,iw)':-2,fps=30"]
 
     def finish(video_args: list[str], audio_bitrate: str) -> list[str]:
         return [
@@ -66,54 +71,23 @@ def _run_h264_encode(
         try:
             if preview:
                 video_args = [
-                    "-c:v",
-                    "h264_nvenc",
-                    "-preset",
-                    "p4",
-                    "-b:v",
-                    "3M",
-                    "-maxrate",
-                    "4M",
-                    "-bufsize",
-                    "8M",
+                    "-c:v", "h264_nvenc", "-preset", "p4",
+                    "-b:v", "3M", "-maxrate", "4M", "-bufsize", "8M",
                 ]
                 audio_bitrate = "128k"
             else:
-                video_args = [
-                    "-c:v",
-                    "h264_nvenc",
-                    "-preset",
-                    "p5",
-                    "-cq",
-                    "19",
-                ]
+                video_args = ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19"]
                 audio_bitrate = "192k"
-
             subprocess.run(finish(video_args, audio_bitrate), check=True)
             return
         except subprocess.CalledProcessError:
-            # FFmpeg can advertise NVENC even when no usable NVIDIA device/driver exists.
             out.unlink(missing_ok=True)
 
     if preview:
-        video_args = [
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "26",
-        ]
+        video_args = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26"]
         audio_bitrate = "128k"
     else:
-        video_args = [
-            "-c:v",
-            "libx264",
-            "-preset",
-            "medium",
-            "-crf",
-            "18",
-        ]
+        video_args = ["-c:v", "libx264", "-preset", "medium", "-crf", "18"]
         audio_bitrate = "192k"
 
     subprocess.run(finish(video_args, audio_bitrate), check=True)
@@ -126,13 +100,6 @@ def create_preview_clip(
     start: float,
     end: float,
 ) -> Path:
-    """Create a small cached H.264 preview for the review UI.
-
-    Streamlit should only receive this short file, never the original multi-hour VOD.
-    The cache key includes the candidate timing so repeated UI reruns do not re-encode
-    the same preview. Older previews for the same candidate are removed when timing
-    changes.
-    """
     require_ffmpeg()
     ffmpeg = require_executable("ffmpeg")
     src = Path(video_path).expanduser().resolve()
@@ -165,6 +132,7 @@ def export_clip(
     title: str | None = None,
     category: str | None = None,
 ) -> Path:
+    """Export a clip without silently overwriting an older export."""
     require_ffmpeg()
     ffmpeg = require_executable("ffmpeg")
     src = Path(video_path).expanduser().resolve()
@@ -172,7 +140,7 @@ def export_clip(
     out_dir = ensure_dir(base_dir / content_folder_name(category))
     duration = max(0.1, float(end) - float(start))
     stem = safe_name(f"{clip_id}_{title}" if title else clip_id)
-    out = out_dir / f"{stem}.mp4"
+    out = _non_overwriting_path(out_dir / f"{stem}.mp4")
 
     _run_h264_encode(ffmpeg, src, out, float(start), duration, preview=False)
     return out
