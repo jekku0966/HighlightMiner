@@ -6,6 +6,7 @@ import streamlit as st
 
 from .categorization import normalize_content_label
 from .export import create_preview_clip, export_clip
+from .learning_store import preference_learning_status
 from .pipeline import analyze_vod
 from .review import load_review, save_review
 from .security import validate_local_video
@@ -16,14 +17,22 @@ from .ui_common import _CHAT_FILTER, _JSON_FILTER, _VIDEO_FILTER, default_work_d
 from .util import format_time
 
 
+def _learning_view(candidate: dict) -> dict:
+    return dict((candidate.get("features") or {}).get("learning") or {})
+
+
 def _candidate_rows(analysis: dict, review: dict) -> list[dict]:
     rows = []
     for candidate in analysis.get("candidates", []):
         item = review["items"].get(candidate["id"], {})
+        learning = _learning_view(candidate)
+        final_score = float(learning.get("final_score", candidate["score"]))
         rows.append({
             "#": candidate["rank"],
             "ID": candidate["id"],
-            "Score": round(candidate["score"] * 10, 1),
+            "Base": round(candidate["score"] * 10, 1),
+            "Personal": round(float(learning["keep_probability"]) * 10, 1) if learning else None,
+            "Final": round(final_score * 10, 1),
             "Start": format_time(item.get("start", candidate["start"])),
             "End": format_time(item.get("end", candidate["end"])),
             "Why": candidate["reason"],
@@ -34,7 +43,11 @@ def _candidate_rows(analysis: dict, review: dict) -> list[dict]:
 
 def _history_label(row: dict) -> str:
     created = str(row.get("created_at", "")).replace("T", " ").replace("+00:00", " UTC")
-    return f"{row['content_label']} · {row['video_name']} · run {row.get('run_number', 1)} · {created} · {row['candidates']} candidates · {row['kept']} kept"
+    profile = str((row.get("cache") or {}).get("mining_profile") or "?")
+    return (
+        f"{row['content_label']} · {profile} · {row['video_name']} · run {row.get('run_number', 1)} · "
+        f"{created} · {row['candidates']} candidates · {row['kept']} kept"
+    )
 
 
 def _run_analysis_ui(*, db_path: Path, video_path: str, chat_path: str, content_label: str, work_dir: str, source_info: dict | None = None, reuse_features: bool = True) -> str:
@@ -60,7 +73,19 @@ def _run_analysis_ui(*, db_path: Path, video_path: str, chat_path: str, content_
     )
     analysis = load_analysis(db_path, analysis_id)
     reused = analysis.get("cache", {}).get("reused_stages", [])
-    st.session_state["analysis_notice"] = ("Reused cached " + ", ".join(reused) + ".") if reused else "Fresh source features generated."
+    learning = dict(analysis.get("cache", {}).get("learning") or {})
+    notices = []
+    notices.append(("Reused cached " + ", ".join(reused) + ".") if reused else "Fresh source features generated.")
+    if learning.get("active"):
+        notices.append(
+            f"Personal reranker active at {float(learning.get('blend_weight', 0.0)):.0%} influence"
+            + (f" with category context for {learning.get('content_label')}." if learning.get("category_applied_candidates") else ".")
+        )
+    elif learning.get("state") == "warming_up":
+        notices.append(f"Learner warming up: {learning.get('reason', 'more reviewed examples needed')}")
+    elif learning.get("state") == "error":
+        notices.append("Learner failed open; the heuristic ranking was preserved for this run.")
+    st.session_state["analysis_notice"] = " ".join(notices)
     status.update(label="Analysis complete", state="complete", expanded=False)
     return analysis_id
 
@@ -70,7 +95,7 @@ def _render_source_sidebar(db_path: Path) -> tuple[str, str, str, str]:
     st.caption("Choose local files directly. The VOD is read in place and never uploaded.")
     video_path = path_picker("VOD", "video_path_input", default=st.session_state.get("video_path", ""), placeholder=r"D:\VODs\stream.mp4", file_filter=_VIDEO_FILTER)
     chat_path = path_picker("Chat file (optional)", "chat_path_input", default=st.session_state.get("chat_path", ""), placeholder="TwitchDownloader JSON / JSONL / CSV", file_filter=_CHAT_FILTER)
-    content_label = st.text_input("Content / Game", key="content_label_input", placeholder="Just Chatting / Overwatch 2 / ...", help="Stored with every candidate for future preference learning.")
+    content_label = st.text_input("Content / Game", key="content_label_input", placeholder="Just Chatting / Overwatch 2 / ...", help="Stored with every candidate and used cautiously as context by preference learning.")
     work_dir = path_picker("Work folder", "work_dir_input", default=st.session_state.get("work_dir", default_work_dir()), folder=True)
 
     settings = load_app_settings(db_path)
@@ -143,6 +168,36 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
             st.exception(exc)
 
 
+def _render_learning_summary(db_path: Path) -> None:
+    stats = learning_summary(db_path)
+    learner = preference_learning_status(db_path)
+    st.caption(f"{stats['kept']} keep · {stats['rejected']} reject · {stats['unreviewed']} unreviewed · {stats['exported']} exported")
+    st.caption("Unreviewed stays unlabeled; it is not silently treated as a reject.")
+    if learner["state"] == "active":
+        st.caption(
+            f"Personal reranker ready · {learner['labeled_count']} labels across "
+            f"{learner['source_count']} VODs · current influence {learner['active_blend_weight']:.0%}."
+        )
+    else:
+        st.caption(f"Learner warming up · {learner['reason']}")
+
+    categories = learner.get("category_adjustments") or {}
+    if categories:
+        labels = [
+            f"{name} ({int(info.get('labeled_count', 0))} labels, {float(info.get('strength', 0.0)):.0%} context strength)"
+            for name, info in sorted(categories.items())
+        ]
+        st.caption("Category context active: " + " · ".join(labels[:5]))
+
+    profiles = learner.get("profile_stats") or {}
+    if profiles:
+        labels = [
+            f"{name}: {int(info.get('labeled_count', 0))} labels / {float(info.get('keep_rate', 0.0)):.0%} keep"
+            for name, info in sorted(profiles.items())
+        ]
+        st.caption("Mining-profile coverage: " + " · ".join(labels[:5]))
+
+
 def _render_history_sidebar(db_path: Path) -> None:
     st.divider()
     st.subheader("🗃️ Analysis history")
@@ -171,9 +226,7 @@ def _render_history_sidebar(db_path: Path) -> None:
                 st.exception(exc)
 
     with st.expander("🧠 Learning data"):
-        stats = learning_summary(db_path)
-        st.caption(f"{stats['kept']} keep · {stats['rejected']} reject · {stats['unreviewed']} unreviewed · {stats['exported']} exported")
-        st.caption("Unreviewed stays unlabeled; it is not silently treated as a reject.")
+        _render_learning_summary(db_path)
 
 
 def _render_review(db_path: Path) -> None:
@@ -191,6 +244,11 @@ def _render_review(db_path: Path) -> None:
     candidates = analysis.get("candidates", [])
     review = load_review(db_path, analysis_id, analysis)
     content_label = normalize_content_label(analysis.get("content_label"))
+    mining_profile = str(analysis.get("cache", {}).get("mining_profile") or "")
+    if not mining_profile:
+        mining_profile = detect_weight_preset(dict(analysis.get("settings", {}).get("weights") or {}))
+    learning_run = dict(analysis.get("cache", {}).get("learning") or {})
+
     st.subheader("📊 Analysis overview")
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Candidates", len(candidates))
@@ -200,14 +258,22 @@ def _render_review(db_path: Path) -> None:
     c5.metric("Whisper language", analysis.get("transcription", {}).get("language") or "?")
     reused = analysis.get("cache", {}).get("reused_stages", [])
     cache_text = f" · reused: {', '.join(reused)}" if reused else ""
-    st.caption(f"Content / Game: **{content_label}** · source run **{analysis.get('run_number', 1)}** · Analysis ID: `{analysis_id[:12]}`{cache_text}")
+    learner_text = f" · learner {float(learning_run.get('blend_weight', 0.0)):.0%}" if learning_run.get("active") else " · learner off"
+    st.caption(
+        f"Content / Game: **{content_label}** · mining profile: **{mining_profile}** · "
+        f"source run **{analysis.get('run_number', 1)}** · Analysis ID: `{analysis_id[:12]}`{cache_text}{learner_text}"
+    )
     if not candidates:
         st.warning("No candidates cleared the current threshold. Adjust Settings and analyze again.")
         return
 
     st.subheader("⛏️ Ranked candidates")
     st.dataframe(_candidate_rows(analysis, review), width="stretch", hide_index=True)
-    labels = [f"{c['id']} · {c['score'] * 10:.1f}/10 · {format_time(c['peak_time'])} · {c['reason']}" for c in candidates]
+    labels = []
+    for candidate in candidates:
+        learning = _learning_view(candidate)
+        display_score = float(learning.get("final_score", candidate["score"]))
+        labels.append(f"{candidate['id']} · {display_score * 10:.1f}/10 · {format_time(candidate['peak_time'])} · {candidate['reason']}")
     selected_label = st.selectbox("Review candidate", labels)
     candidate = candidates[labels.index(selected_label)]
     item = review["items"][candidate["id"]]
@@ -232,6 +298,19 @@ def _render_review(db_path: Path) -> None:
 
     title = st.text_input("Optional clip title", value=item.get("title", ""), key=f"title_{analysis_id}_{candidate['id']}")
     st.caption(f"Signals — audio {candidate['audio_score']:.2f} · transcript {candidate['transcript_score']:.2f} · chat {candidate['chat_score']:.2f}")
+    learning = _learning_view(candidate)
+    if learning:
+        category_note = ""
+        if learning.get("category_adjustment_active"):
+            category_note = (
+                f" · category context {learning.get('category')} "
+                f"({float(learning.get('category_strength', 0.0)):.0%} strength / {int(learning.get('category_labeled_count', 0))} labels)"
+            )
+        st.caption(
+            f"Ranking — base {candidate['score']:.3f} · global personal {float(learning.get('global_keep_probability', learning['keep_probability'])):.3f} · "
+            f"personal {float(learning['keep_probability']):.3f} · final {float(learning['final_score']):.3f} · "
+            f"learner influence {float(learning['blend_weight']):.0%}{category_note}"
+        )
     if candidate.get("transcript"):
         with st.expander("Transcript around this moment", expanded=True):
             st.write(candidate["transcript"])
