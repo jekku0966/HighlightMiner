@@ -3,7 +3,13 @@ from pathlib import Path
 
 from highlightminer.config import Settings
 from highlightminer.settings_presets import WEIGHT_PRESETS, detect_weight_preset, normalize_weights
-from highlightminer.settings_store import export_app_settings, import_app_settings, load_app_settings, save_app_settings
+from highlightminer.settings_store import (
+    export_app_settings,
+    import_app_settings,
+    load_app_settings,
+    reset_app_settings,
+    save_app_settings,
+)
 from highlightminer.storage import connect
 
 
@@ -49,3 +55,9 @@ def test_app_settings_roundtrip_import_export(tmp_path: Path) -> None:
     imported = import_app_settings(imported_path, db)
     assert imported.max_candidates == 12
     assert load_app_settings(db).max_candidates == 12
+
+    reset = reset_app_settings(db)
+    assert reset.max_candidates == 40
+    assert detect_weight_preset(reset.weights) == "Balanced"
+    assert "what the fuck" in reset.reaction_phrases
+    assert load_app_settings(db).max_candidates == 40
