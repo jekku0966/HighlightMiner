@@ -90,6 +90,10 @@ def analyze_vod(
     The same physical VOD may have many analysis runs. Compatible transcript,
     audio, and chat feature stages are reused from prior runs by default; the
     candidate ranking and review state are always new for each run.
+
+    ``source_info`` is only a UI optimization hint. Source identity is always
+    re-derived from the actual validated VOD before cache lookup so stale UI
+    state cannot attach a different file to the wrong source history.
     """
     progress = progress or _noop
     video = validate_local_video(video_path)
@@ -97,7 +101,13 @@ def analyze_vod(
     normalized_content_label = normalize_content_label(content_label)
 
     progress("Identifying source VOD", 0.01)
-    source = register_source(db_path, source_info or describe_source(video))
+    actual_source = describe_source(video)
+    if source_info and source_info.get("fingerprint") == actual_source["fingerprint"]:
+        # Keep the freshly resolved path/size/name while accepting that the UI
+        # already recognized this source. register_source resolves the DB row by
+        # fingerprint either way.
+        actual_source["fingerprint"] = str(source_info["fingerprint"])
+    source = register_source(db_path, actual_source)
     signatures = _stage_signatures(settings, chat_path)
     cached = (
         load_reusable_features(
