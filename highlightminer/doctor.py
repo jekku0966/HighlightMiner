@@ -34,6 +34,7 @@ def run_doctor() -> int:
                 capture_output=True,
                 text=True,
                 check=True,
+                shell=False,
             ).stdout
 
             print(
