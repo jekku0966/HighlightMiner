@@ -6,6 +6,14 @@ All notable changes to HighlightMiner will be documented here.
 
 ### Added
 
+- Added source-aware VOD identity and rerun history. A sampled content fingerprint groups multiple analysis runs of the same physical VOD without using the filename/path as identity.
+- Added stage-aware rerun reuse for audio features, Whisper transcripts, and chat features. Compatible reruns can skip expensive processing and rerank from cached evidence.
+- Added **Load latest**, **Analyze again**, and **Force full reprocess** behavior when the UI detects that a VOD has already been analyzed.
+- Added CLI `analyze --no-reuse` for forcing fresh processing and `learning-stats` for reporting Keep/Reject/Unreviewed/export counts.
+- Added candidate feature snapshots, review-event history, and complete export history for future preference learning.
+- Added `learning_examples()` with explicit learning labels: Keep=`1`, Reject=`0`, Unreviewed=`None`.
+- Added tests for sampled source identity, multiple runs per VOD, reusable feature lookup, and unlabeled Unreviewed examples.
+- Added `RERUNS_AND_LEARNING.md` documenting source identity, cache invalidation, review labels, and the future-learning data contract.
 - Added a native Windows desktop shell for `v0.2-dev` using pywebview + Microsoft Edge WebView2. The local Streamlit backend now runs headlessly and is presented inside the HighlightMiner application window instead of opening a normal browser tab.
 - Added `highlightminer/desktop.py` for UI-mode resolution, Streamlit readiness checks, native-window lifecycle handling, browser fallback, and packaged desktop-runtime probing.
 - Added `HighlightMiner.exe ui --browser` as an explicit troubleshooting/development fallback.
@@ -14,6 +22,10 @@ All notable changes to HighlightMiner will be documented here.
 
 ### Changed
 
+- Existing v0.2 SQLite databases are migrated in place to the source/run schema; existing generated analysis history is retained.
+- Changing only scoring settings no longer requires another Whisper pass when a compatible transcript is available. Reaction phrases rescore cached transcript text without invalidating transcription.
+- Chat reuse keys include a full SHA-256 of the selected chat file; VOD source fingerprints are deliberately sampled identity keys rather than security/integrity hashes.
+- Exports no longer silently overwrite a same-named clip; the next available numbered suffix is used and every export is recorded in SQLite.
 - Closing the native HighlightMiner window now shuts down the child Streamlit server and exits the application cleanly; the existing in-app Exit button closes both as well.
 - The packaged Streamlit server is now always headless and uses `127.0.0.1` consistently for server/browser addressing.
 - PyInstaller now collects pywebview resources, explicitly keeps the WinForms/EdgeChromium/pythonnet imports, and uses `hide_console="hide-early"` so double-click launches hide their owned console while terminal-launched CLI commands retain output.
