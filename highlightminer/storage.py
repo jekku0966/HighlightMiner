@@ -8,11 +8,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .categorization import normalize_content_label
+from .identity import describe_source
 from .runtime import app_root
 from .security import validate_legacy_analysis_file, validate_local_video
 from .util import load_json
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+FEATURE_SCHEMA_VERSION = 2
+ALGORITHM_VERSION = "heuristic-v1"
 DATABASE_FILENAME = "highlightminer.db"
 
 
@@ -37,6 +40,16 @@ def _unjson(value: str | None, default: Any) -> Any:
         return default
 
 
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, definition: str) -> None:
+    name = definition.split()[0]
+    if name not in _columns(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+
+
 def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
     path = Path(db_path or default_db_path()).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,6 +67,16 @@ def initialize(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS metadata (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sources (
+            id TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL UNIQUE,
+            current_path TEXT NOT NULL,
+            video_name TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS analyses (
@@ -106,6 +129,30 @@ def initialize(conn: sqlite3.Connection) -> None:
                 REFERENCES candidates(analysis_id, candidate_id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS review_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            from_status TEXT NOT NULL,
+            to_status TEXT NOT NULL,
+            start REAL NOT NULL,
+            end REAL NOT NULL,
+            title TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (analysis_id, candidate_id)
+                REFERENCES candidates(analysis_id, candidate_id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS exports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            output_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (analysis_id, candidate_id)
+                REFERENCES candidates(analysis_id, candidate_id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS transcript_segments (
             analysis_id TEXT NOT NULL,
             seq INTEGER NOT NULL,
@@ -140,17 +187,47 @@ def initialize(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (analysis_id, seq),
             FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE
         );
+        """
+    )
 
+    for definition in (
+        "source_id TEXT",
+        "source_fingerprint TEXT",
+        "run_number INTEGER NOT NULL DEFAULT 1",
+        f"algorithm_version TEXT NOT NULL DEFAULT '{ALGORITHM_VERSION}'",
+        f"feature_schema_version INTEGER NOT NULL DEFAULT {FEATURE_SCHEMA_VERSION}",
+        "audio_signature TEXT",
+        "transcript_signature TEXT",
+        "chat_signature TEXT",
+        "cache_json TEXT NOT NULL DEFAULT '{}'",
+    ):
+        _ensure_column(conn, "analyses", definition)
+    _ensure_column(conn, "candidates", "features_json TEXT NOT NULL DEFAULT '{}'")
+
+    conn.executescript(
+        """
         CREATE INDEX IF NOT EXISTS idx_candidates_analysis_rank
             ON candidates(analysis_id, rank);
         CREATE INDEX IF NOT EXISTS idx_reviews_status
             ON reviews(status);
+        CREATE INDEX IF NOT EXISTS idx_review_events_candidate
+            ON review_events(analysis_id, candidate_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_exports_candidate
+            ON exports(analysis_id, candidate_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_transcript_analysis_time
             ON transcript_segments(analysis_id, start, end);
         CREATE INDEX IF NOT EXISTS idx_analyses_created
             ON analyses(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_analyses_content
             ON analyses(content_label);
+        CREATE INDEX IF NOT EXISTS idx_analyses_source
+            ON analyses(source_id, run_number);
+        CREATE INDEX IF NOT EXISTS idx_analyses_audio_cache
+            ON analyses(source_id, audio_signature, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_analyses_transcript_cache
+            ON analyses(source_id, transcript_signature, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_analyses_chat_cache
+            ON analyses(source_id, chat_signature, created_at DESC);
         """
     )
     conn.execute(
@@ -159,6 +236,188 @@ def initialize(conn: sqlite3.Connection) -> None:
         (str(SCHEMA_VERSION),),
     )
     conn.commit()
+
+
+def register_source(db_path: str | Path | None, source: dict[str, Any]) -> dict[str, Any]:
+    fingerprint = str(source["fingerprint"])
+    current_path = str(Path(source["path"]).expanduser().resolve())
+    video_name = str(source.get("video_name") or Path(current_path).name)
+    file_size = int(source.get("file_size", Path(current_path).stat().st_size))
+    now = utc_now()
+
+    with connect(db_path) as conn:
+        row = conn.execute("SELECT * FROM sources WHERE fingerprint = ?", (fingerprint,)).fetchone()
+        if row is None:
+            source_id = uuid.uuid4().hex
+            conn.execute(
+                """
+                INSERT INTO sources(id, fingerprint, current_path, video_name, file_size, first_seen_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (source_id, fingerprint, current_path, video_name, file_size, now, now),
+            )
+        else:
+            source_id = str(row["id"])
+            conn.execute(
+                """
+                UPDATE sources
+                SET current_path = ?, video_name = ?, file_size = ?, last_seen_at = ?
+                WHERE id = ?
+                """,
+                (current_path, video_name, file_size, now, source_id),
+            )
+
+        legacy_rows = conn.execute(
+            """
+            SELECT id FROM analyses
+            WHERE source_id IS NULL AND video_path = ?
+            ORDER BY created_at, id
+            """,
+            (current_path,),
+        ).fetchall()
+        next_run = int(
+            conn.execute(
+                "SELECT COALESCE(MAX(run_number), 0) FROM analyses WHERE source_id = ?",
+                (source_id,),
+            ).fetchone()[0]
+        )
+        for legacy in legacy_rows:
+            next_run += 1
+            conn.execute(
+                """
+                UPDATE analyses
+                SET source_id = ?, source_fingerprint = ?, run_number = ?
+                WHERE id = ?
+                """,
+                (source_id, fingerprint, next_run, legacy["id"]),
+            )
+
+        conn.execute(
+            """
+            UPDATE analyses
+            SET video_path = ?, video_name = ?, source_fingerprint = ?
+            WHERE source_id = ?
+            """,
+            (current_path, video_name, fingerprint, source_id),
+        )
+        conn.commit()
+
+    return {
+        "id": source_id,
+        "fingerprint": fingerprint,
+        "path": current_path,
+        "video_name": video_name,
+        "file_size": file_size,
+    }
+
+
+def find_source_runs(
+    db_path: str | Path | None,
+    video_path: str | Path,
+    *,
+    source: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    video = validate_local_video(video_path)
+    source_row = register_source(db_path, source or describe_source(video))
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                a.id, a.created_at, a.run_number, a.content_label, a.video_name,
+                COUNT(c.candidate_id) AS candidates,
+                SUM(CASE WHEN r.status = 'keep' THEN 1 ELSE 0 END) AS kept,
+                SUM(CASE WHEN r.status = 'reject' THEN 1 ELSE 0 END) AS rejected,
+                SUM(CASE WHEN r.status = 'unreviewed' THEN 1 ELSE 0 END) AS unreviewed
+            FROM analyses a
+            LEFT JOIN candidates c ON c.analysis_id = a.id
+            LEFT JOIN reviews r
+                ON r.analysis_id = c.analysis_id AND r.candidate_id = c.candidate_id
+            WHERE a.source_id = ?
+            GROUP BY a.id
+            ORDER BY a.run_number DESC, a.created_at DESC
+            """,
+            (source_row["id"],),
+        ).fetchall()
+    return source_row, [dict(row) for row in rows]
+
+
+def _feature_rows(conn: sqlite3.Connection, table: str, analysis_id: str) -> list[dict[str, Any]]:
+    if table == "audio_features":
+        rows = conn.execute(
+            "SELECT time, dbfs, energy, onset, score FROM audio_features WHERE analysis_id = ? ORDER BY seq",
+            (analysis_id,),
+        ).fetchall()
+    elif table == "transcript_segments":
+        rows = conn.execute(
+            "SELECT start, end, text, score, reasons_json FROM transcript_segments WHERE analysis_id = ? ORDER BY seq",
+            (analysis_id,),
+        ).fetchall()
+        return [
+            {
+                "start": float(row["start"]),
+                "end": float(row["end"]),
+                "text": row["text"],
+                "score": float(row["score"]),
+                "reasons": _unjson(row["reasons_json"], []),
+            }
+            for row in rows
+        ]
+    elif table == "chat_features":
+        rows = conn.execute(
+            "SELECT time, count, ratio, score FROM chat_features WHERE analysis_id = ? ORDER BY seq",
+            (analysis_id,),
+        ).fetchall()
+    else:
+        raise ValueError(f"Unsupported feature table: {table}")
+    return [dict(row) for row in rows]
+
+
+def load_reusable_features(
+    db_path: str | Path | None,
+    source_id: str,
+    *,
+    audio_signature: str,
+    transcript_signature: str,
+    chat_signature: str,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "audio": None,
+        "transcript": None,
+        "transcription": None,
+        "chat": None,
+        "chat_info": None,
+        "from": {},
+    }
+    with connect(db_path) as conn:
+        stage_specs = (
+            ("audio", "audio_signature", audio_signature, "audio_features"),
+            ("transcript", "transcript_signature", transcript_signature, "transcript_segments"),
+            ("chat", "chat_signature", chat_signature, "chat_features"),
+        )
+        for stage, column, signature, table in stage_specs:
+            row = conn.execute(
+                f"""
+                SELECT id, transcription_json, chat_json
+                FROM analyses
+                WHERE source_id = ? AND {column} = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (source_id, signature),
+            ).fetchone()
+            if row is None:
+                continue
+            analysis_id = str(row["id"])
+            values = _feature_rows(conn, table, analysis_id)
+            if stage != "chat" and not values:
+                continue
+            result[stage] = values
+            result["from"][stage] = analysis_id
+            if stage == "transcript":
+                result["transcription"] = _unjson(row["transcription_json"], {})
+            elif stage == "chat":
+                result["chat_info"] = _unjson(row["chat_json"], {})
+    return result
 
 
 def save_analysis(
@@ -170,11 +429,17 @@ def save_analysis(
     *,
     work_dir: str | Path,
     analysis_id: str | None = None,
+    source: dict[str, Any] | None = None,
+    signatures: dict[str, str] | None = None,
+    cache_info: dict[str, Any] | None = None,
 ) -> str:
     analysis_id = analysis_id or uuid.uuid4().hex
     video = validate_local_video(analysis["video_path"])
+    source_row = register_source(db_path, source or describe_source(video))
     content_label = normalize_content_label(analysis.get("content_label"))
     created_at = utc_now()
+    signatures = signatures or {}
+    cache_info = cache_info or {}
 
     candidates = list(analysis.get("candidates", []))
     transcript_rows = list(transcript)
@@ -182,13 +447,21 @@ def save_analysis(
     chat_rows = list(chat_features)
 
     with connect(db_path) as conn:
+        run_number = int(
+            conn.execute(
+                "SELECT COALESCE(MAX(run_number), 0) + 1 FROM analyses WHERE source_id = ?",
+                (source_row["id"],),
+            ).fetchone()[0]
+        )
         conn.execute(
             """
             INSERT INTO analyses(
                 id, created_at, video_path, video_name, content_label, duration,
                 work_dir, media_json, transcription_json, chat_json, settings_json,
-                source_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_version, source_id, source_fingerprint, run_number,
+                algorithm_version, feature_schema_version, audio_signature,
+                transcript_signature, chat_signature, cache_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 analysis_id,
@@ -202,7 +475,16 @@ def save_analysis(
                 _json(analysis.get("transcription", {})),
                 _json(analysis.get("chat", {})),
                 _json(analysis.get("settings", {})),
-                int(analysis.get("version", 1)),
+                int(analysis.get("version", 2)),
+                source_row["id"],
+                source_row["fingerprint"],
+                run_number,
+                str(analysis.get("algorithm_version", ALGORITHM_VERSION)),
+                int(analysis.get("feature_schema_version", FEATURE_SCHEMA_VERSION)),
+                signatures.get("audio"),
+                signatures.get("transcript"),
+                signatures.get("chat"),
+                _json(cache_info),
             ),
         )
 
@@ -213,8 +495,8 @@ def save_analysis(
                 INSERT INTO candidates(
                     analysis_id, candidate_id, rank, score, peak_time, start, end,
                     audio_score, transcript_score, chat_score, reason, transcript,
-                    content_label
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    content_label, features_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     analysis_id,
@@ -230,6 +512,7 @@ def save_analysis(
                     str(c.get("reason", "")),
                     str(c.get("transcript", "")),
                     normalize_content_label(c.get("content_label") or content_label),
+                    _json(c.get("features", {})),
                 ),
             )
             conn.execute(
@@ -314,6 +597,12 @@ def load_analysis(db_path: str | Path | None, analysis_id: str) -> dict:
     result = {
         "version": int(row["source_version"]),
         "analysis_id": row["id"],
+        "source_id": row["source_id"],
+        "source_fingerprint": row["source_fingerprint"],
+        "run_number": int(row["run_number"] or 1),
+        "algorithm_version": row["algorithm_version"],
+        "feature_schema_version": int(row["feature_schema_version"] or 1),
+        "cache": _unjson(row["cache_json"], {}),
         "created_at": row["created_at"],
         "video_path": row["video_path"],
         "video_name": row["video_name"],
@@ -341,6 +630,7 @@ def load_analysis(db_path: str | Path | None, analysis_id: str) -> dict:
                 "reason": c["reason"],
                 "transcript": c["transcript"],
                 "content_label": c["content_label"],
+                "features": _unjson(c["features_json"], {}),
             }
         )
     return result
@@ -352,10 +642,11 @@ def list_analyses(db_path: str | Path | None, limit: int = 100) -> list[dict]:
             """
             SELECT
                 a.id, a.created_at, a.video_path, a.video_name, a.content_label,
-                a.duration,
+                a.duration, a.source_id, a.run_number, a.cache_json,
                 COUNT(c.candidate_id) AS candidates,
                 SUM(CASE WHEN r.status = 'keep' THEN 1 ELSE 0 END) AS kept,
-                SUM(CASE WHEN r.status = 'reject' THEN 1 ELSE 0 END) AS rejected
+                SUM(CASE WHEN r.status = 'reject' THEN 1 ELSE 0 END) AS rejected,
+                SUM(CASE WHEN r.status = 'unreviewed' THEN 1 ELSE 0 END) AS unreviewed
             FROM analyses a
             LEFT JOIN candidates c ON c.analysis_id = a.id
             LEFT JOIN reviews r
@@ -374,9 +665,13 @@ def list_analyses(db_path: str | Path | None, limit: int = 100) -> list[dict]:
             "video_name": r["video_name"],
             "content_label": r["content_label"],
             "duration": float(r["duration"]),
+            "source_id": r["source_id"],
+            "run_number": int(r["run_number"] or 1),
+            "cache": _unjson(r["cache_json"], {}),
             "candidates": int(r["candidates"] or 0),
             "kept": int(r["kept"] or 0),
             "rejected": int(r["rejected"] or 0),
+            "unreviewed": int(r["unreviewed"] or 0),
         }
         for r in rows
     ]
@@ -424,23 +719,44 @@ def save_review(db_path: str | Path | None, analysis_id: str, review: dict) -> N
             status = str(item.get("status", "unreviewed"))
             if status not in {"unreviewed", "keep", "reject"}:
                 raise ValueError(f"Invalid review status: {status}")
-            reviewed_at = now if status in {"keep", "reject"} else None
+            old = conn.execute(
+                "SELECT status, start, end, title, reviewed_at FROM reviews WHERE analysis_id = ? AND candidate_id = ?",
+                (analysis_id, candidate_id),
+            ).fetchone()
+            if old is None:
+                continue
+
+            start = float(item.get("start", 0.0))
+            end = float(item.get("end", 0.0))
+            title = str(item.get("title", ""))[:500]
+            changed = (
+                status != old["status"]
+                or abs(start - float(old["start"])) > 1e-6
+                or abs(end - float(old["end"])) > 1e-6
+                or title != old["title"]
+            )
+            if not changed:
+                continue
+
+            reviewed_at = old["reviewed_at"]
+            if status != old["status"]:
+                reviewed_at = now if status in {"keep", "reject"} else None
+
             conn.execute(
                 """
                 UPDATE reviews
                 SET status = ?, start = ?, end = ?, title = ?, reviewed_at = ?, updated_at = ?
                 WHERE analysis_id = ? AND candidate_id = ?
                 """,
-                (
-                    status,
-                    float(item.get("start", 0.0)),
-                    float(item.get("end", 0.0)),
-                    str(item.get("title", ""))[:500],
-                    reviewed_at,
-                    now,
-                    analysis_id,
-                    candidate_id,
-                ),
+                (status, start, end, title, reviewed_at, now, analysis_id, candidate_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO review_events(
+                    analysis_id, candidate_id, from_status, to_status, start, end, title, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (analysis_id, candidate_id, old["status"], status, start, end, title, now),
             )
         conn.commit()
 
@@ -452,14 +768,22 @@ def record_export(
     output_path: str | Path,
 ) -> None:
     now = utc_now()
+    path = str(Path(output_path).expanduser().resolve())
     with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO exports(analysis_id, candidate_id, output_path, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (analysis_id, candidate_id, path, now),
+        )
         conn.execute(
             """
             UPDATE reviews
             SET exported_at = ?, export_path = ?, updated_at = ?
             WHERE analysis_id = ? AND candidate_id = ?
             """,
-            (now, str(Path(output_path).expanduser().resolve()), now, analysis_id, candidate_id),
+            (now, path, now, analysis_id, candidate_id),
         )
         conn.commit()
 
@@ -492,18 +816,112 @@ def transcript_window(
     ]
 
 
+def learning_examples(
+    db_path: str | Path | None,
+    *,
+    include_unreviewed: bool = True,
+) -> list[dict[str, Any]]:
+    where = "" if include_unreviewed else "WHERE r.status IN ('keep', 'reject')"
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                a.id AS analysis_id, a.source_id, a.run_number, a.created_at,
+                a.content_label, a.algorithm_version, a.feature_schema_version,
+                c.candidate_id, c.rank, c.score, c.peak_time, c.start AS original_start,
+                c.end AS original_end, c.audio_score, c.transcript_score, c.chat_score,
+                c.reason, c.features_json,
+                r.status, r.start AS reviewed_start, r.end AS reviewed_end, r.title,
+                r.reviewed_at, r.exported_at,
+                (SELECT COUNT(*) FROM exports e
+                 WHERE e.analysis_id = c.analysis_id AND e.candidate_id = c.candidate_id) AS export_count,
+                (SELECT COUNT(*) FROM review_events re
+                 WHERE re.analysis_id = c.analysis_id AND re.candidate_id = c.candidate_id) AS review_event_count
+            FROM candidates c
+            JOIN analyses a ON a.id = c.analysis_id
+            JOIN reviews r ON r.analysis_id = c.analysis_id AND r.candidate_id = c.candidate_id
+            {where}
+            ORDER BY a.created_at, c.rank
+            """
+        ).fetchall()
+
+    examples: list[dict[str, Any]] = []
+    for row in rows:
+        status = str(row["status"])
+        label = 1 if status == "keep" else 0 if status == "reject" else None
+        original_start = float(row["original_start"])
+        original_end = float(row["original_end"])
+        reviewed_start = float(row["reviewed_start"])
+        reviewed_end = float(row["reviewed_end"])
+        examples.append(
+            {
+                "analysis_id": row["analysis_id"],
+                "source_id": row["source_id"],
+                "run_number": int(row["run_number"] or 1),
+                "created_at": row["created_at"],
+                "content_label": row["content_label"],
+                "algorithm_version": row["algorithm_version"],
+                "feature_schema_version": int(row["feature_schema_version"] or 1),
+                "candidate_id": row["candidate_id"],
+                "rank": int(row["rank"]),
+                "base_score": float(row["score"]),
+                "peak_time": float(row["peak_time"]),
+                "audio_score": float(row["audio_score"]),
+                "transcript_score": float(row["transcript_score"]),
+                "chat_score": float(row["chat_score"]),
+                "reason": row["reason"],
+                "features": _unjson(row["features_json"], {}),
+                "review_status": status,
+                "label": label,
+                "exported": int(row["export_count"] or 0) > 0,
+                "export_count": int(row["export_count"] or 0),
+                "review_event_count": int(row["review_event_count"] or 0),
+                "title": row["title"],
+                "reviewed_at": row["reviewed_at"],
+                "exported_at": row["exported_at"],
+                "original_start": original_start,
+                "original_end": original_end,
+                "reviewed_start": reviewed_start,
+                "reviewed_end": reviewed_end,
+                "start_adjustment": reviewed_start - original_start,
+                "end_adjustment": reviewed_end - original_end,
+                "original_duration": original_end - original_start,
+                "reviewed_duration": reviewed_end - reviewed_start,
+            }
+        )
+    return examples
+
+
+def learning_summary(db_path: str | Path | None) -> dict[str, int]:
+    with connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'keep' THEN 1 ELSE 0 END) AS kept,
+                SUM(CASE WHEN status = 'reject' THEN 1 ELSE 0 END) AS rejected,
+                SUM(CASE WHEN status = 'unreviewed' THEN 1 ELSE 0 END) AS unreviewed,
+                SUM(CASE WHEN exported_at IS NOT NULL THEN 1 ELSE 0 END) AS exported
+            FROM reviews
+            """
+        ).fetchone()
+    return {
+        "total": int(row["total"] or 0),
+        "kept": int(row["kept"] or 0),
+        "rejected": int(row["rejected"] or 0),
+        "unreviewed": int(row["unreviewed"] or 0),
+        "exported": int(row["exported"] or 0),
+    }
+
+
 def import_legacy_analysis(
     analysis_json: str | Path,
     db_path: str | Path | None = None,
 ) -> str:
-    """Import a v0.1 analysis folder into SQLite.
-
-    The referenced source VOD must still exist locally. Network source paths are
-    rejected by validate_local_video before any preview/export can be triggered.
-    """
+    """Import a v0.1 analysis folder into SQLite."""
     analysis_path = validate_legacy_analysis_file(analysis_json)
     analysis = load_json(analysis_path)
-    validate_local_video(analysis.get("video_path", ""))
+    video = validate_local_video(analysis.get("video_path", ""))
 
     folder = analysis_path.parent
     transcript = load_json(folder / "transcript.json") if (folder / "transcript.json").is_file() else []
@@ -517,6 +935,8 @@ def import_legacy_analysis(
         audio_features,
         chat_features,
         work_dir=folder,
+        source=describe_source(video),
+        cache_info={"legacy_import": True},
     )
 
     review_path = folder / "review.json"
