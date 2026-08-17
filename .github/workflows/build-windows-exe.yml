@@ -32,6 +32,15 @@ jobs:
           python-version: "3.13"
           cache: pip
 
+      - name: Read project version
+        id: project
+        shell: powershell
+        run: |
+          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
+          if (-not $version) { throw "Could not read project version from pyproject.toml." }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Packaging HighlightMiner v$version for windows-x64"
+
       - name: Build portable application
         shell: powershell
         run: .\build_windows.ps1
@@ -119,7 +128,7 @@ jobs:
       - name: Upload Windows portable ZIP
         uses: actions/upload-artifact@v7
         with:
-          name: HighlightMiner-Windows-x64
-          path: dist/HighlightMiner-Windows-x64.zip
+          name: HighlightMiner-v${{ steps.project.outputs.version }}-windows-x64
+          path: dist/HighlightMiner-v${{ steps.project.outputs.version }}-windows-x64.zip
           if-no-files-found: error
           retention-days: 14
