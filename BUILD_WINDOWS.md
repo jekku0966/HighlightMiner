@@ -12,20 +12,33 @@ From the repository root in PowerShell:
 .\build_windows.ps1
 ```
 
+The build script reads the release version directly from `[project].version` in `pyproject.toml`. Windows release packaging is currently validated for **x64** only. The portable archive is therefore named using the project version, platform, and architecture:
+
+```text
+HighlightMiner-v<version>-windows-x64.zip
+```
+
+For example, version `0.1.2` produces:
+
+```text
+HighlightMiner-v0.1.2-windows-x64.zip
+```
+
 The script will:
 
-1. Create/reuse `.build-venv`.
-2. Install HighlightMiner, tests, and PyInstaller.
-3. Run the unit tests.
-4. Build `HighlightMiner.exe` using `HighlightMiner.spec`.
-5. Copy `settings.json` and user-facing documentation into the portable app folder.
-6. Copy local `ffmpeg.exe` / `ffprobe.exe` from the repository root or `./bin` when present.
-7. Copy local CUDA 12 / cuDNN 9 DLLs already placed in the repository root.
-8. Smoke-test `HighlightMiner.exe --help`.
-9. Run the packaged `doctor` check when the local FFmpeg and CUDA runtime files are complete.
-10. Create `dist/HighlightMiner-Windows-x64.zip`.
+1. Read the project version from `pyproject.toml` and verify an x64 build host.
+2. Create/reuse `.build-venv`.
+3. Install HighlightMiner, tests, and PyInstaller.
+4. Run the unit tests.
+5. Build `HighlightMiner.exe` using `HighlightMiner.spec`.
+6. Copy `settings.json` and user-facing documentation into the portable app folder.
+7. Copy local `ffmpeg.exe` / `ffprobe.exe` from the repository root or `./bin` when present.
+8. Copy local CUDA 12 / cuDNN 9 DLLs already placed in the repository root.
+9. Smoke-test `HighlightMiner.exe --help`.
+10. Run the packaged `doctor` check when the local FFmpeg and CUDA runtime files are complete.
+11. Create the versioned `dist/HighlightMiner-v<version>-windows-x64.zip` archive.
 
-Outputs:
+Outputs for v0.1.2:
 
 ```text
 dist/
@@ -39,7 +52,7 @@ dist/
 │   ├── cudnn64_9.dll
 │   ├── cudnn_*.dll
 │   └── _internal/
-└── HighlightMiner-Windows-x64.zip
+└── HighlightMiner-v0.1.2-windows-x64.zip
 ```
 
 Useful build switches:
@@ -93,7 +106,7 @@ The resulting local ZIP will then carry those files beside `HighlightMiner.exe`.
 
 ## GitHub Actions build
 
-`.github/workflows/build-windows-exe.yml` builds the frozen Windows application on a GitHub-hosted Windows runner and uploads the generated ZIP as a workflow artifact.
+`.github/workflows/build-windows-exe.yml` builds the frozen Windows application on a GitHub-hosted Windows runner and uploads a versioned workflow artifact using the same `HighlightMiner-v<version>-windows-x64` naming convention.
 
 The workflow also verifies that the bundled raw Streamlit script exists, that CTranslate2 and faster-whisper import from the frozen executable, and that the packaged Streamlit server actually responds on localhost before the artifact is accepted.
 
@@ -104,5 +117,6 @@ For licensing/provenance clarity, the CI runner does not automatically download 
 - Python 3.13 is used by the GitHub Actions packaging job.
 - PyInstaller 6.21+ is declared in the `packaging` optional dependency group.
 - Build mode: **onedir**, console enabled for early alpha diagnostics.
+- Release archive target: **Windows x64**.
 
 Once the portable build has been tested on clean Windows machines, the bundle can be reduced/optimized and an icon or console-less production launcher can be added without changing the analysis pipeline.
