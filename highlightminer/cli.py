@@ -25,6 +25,7 @@ from .pipeline import analyze_vod
 from .review import load_review
 from .runtime import app_root, bundled_path, is_frozen
 from .security import validate_local_video
+from .settings_store import load_app_settings
 from .storage import (
     default_db_path,
     import_legacy_analysis,
@@ -43,7 +44,7 @@ def _progress(message: str, value: float) -> None:
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:
-    settings = Settings.from_file(args.settings)
+    settings = Settings.from_file(args.settings) if args.settings else load_app_settings(args.db)
     analysis_id = analyze_vod(
         args.video,
         args.work_dir,
@@ -59,6 +60,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     print(f"Source run: {analysis.get('run_number', 1)}")
     reused = analysis.get("cache", {}).get("reused_stages", [])
     print(f"Reused stages: {', '.join(reused) if reused else 'none'}")
+    print(f"Settings: {'JSON override ' + str(Path(args.settings).expanduser().resolve()) if args.settings else 'active database profile'}")
     print(f"Database: {Path(args.db).expanduser().resolve()}")
     return 0
 
@@ -282,7 +284,11 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--chat", default=None, help="Optional chat JSON/JSONL/CSV")
     analyze.add_argument("--content", default=None, help="Content/game label")
     analyze.add_argument("--work-dir", default=str(app_root() / "highlightminer_work"))
-    analyze.add_argument("--settings", default=str(app_root() / "settings.json"))
+    analyze.add_argument(
+        "--settings",
+        default=None,
+        help="Optional settings JSON override; otherwise use the active profile in --db",
+    )
     analyze.add_argument("--db", default=default_db, help="SQLite database path")
     analyze.add_argument("--no-reuse", action="store_true", help="Force fresh audio/transcript/chat processing")
     analyze.set_defaults(func=cmd_analyze)
