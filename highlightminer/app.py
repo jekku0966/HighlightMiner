@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import os
+import subprocess
 from pathlib import Path
 
 import streamlit as st
@@ -15,6 +17,10 @@ from highlightminer.util import format_time, load_json
 # UI uses Streamlit public APIs documented at docs.streamlit.io.
 # No Streamlit source code is vendored; see ATTRIBUTIONS.md.
 
+_VIDEO_FILTER = "Video files|*.mp4;*.mkv;*.mov;*.webm;*.avi;*.m4v;*.ts|All files|*.*"
+_CHAT_FILTER = "Chat files|*.json;*.jsonl;*.ndjson;*.csv|All files|*.*"
+_JSON_FILTER = "JSON files|*.json|All files|*.*"
+
 
 def _default_settings_path() -> str:
     p = app_root() / "settings.json"
@@ -23,6 +29,132 @@ def _default_settings_path() -> str:
 
 def _default_work_dir() -> str:
     return str(app_root() / "highlightminer_work")
+
+
+def _dialog_initial_directory(value: str | None) -> str:
+    if value:
+        candidate = Path(value).expanduser()
+        if candidate.is_file():
+            candidate = candidate.parent
+        elif not candidate.is_dir():
+            candidate = candidate.parent
+        if candidate.is_dir():
+            return str(candidate.resolve())
+    return str(Path.home())
+
+
+def _ps_literal(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _run_windows_dialog(script: str) -> str | None:
+    """Run a native Windows picker in a separate STA PowerShell process.
+
+    Browser file inputs upload file contents and intentionally hide the full
+    local path. HighlightMiner is a local application and works with very large
+    VODs, so the picker returns only the selected filesystem path instead.
+    """
+    if os.name != "nt":
+        raise RuntimeError("Native Browse buttons are currently available on Windows only. Enter the path manually on this platform.")
+
+    wrapped = (
+        "$ErrorActionPreference = 'Stop';"
+        "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false);"
+        + script
+    )
+    encoded = base64.b64encode(wrapped.encode("utf-16le")).decode("ascii")
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-STA", "-EncodedCommand", encoded],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=creationflags,
+        check=False,
+    )
+    stdout = result.stdout.decode("utf-8-sig", errors="replace").strip()
+    stderr = result.stderr.decode("utf-8-sig", errors="replace").strip()
+    if result.returncode != 0:
+        raise RuntimeError(stderr or f"Native file dialog failed with exit code {result.returncode}.")
+    return stdout or None
+
+
+def _choose_file(title: str, file_filter: str, initial: str | None = None) -> str | None:
+    initial_dir = _dialog_initial_directory(initial)
+    script = f"""
+Add-Type -AssemblyName System.Windows.Forms;
+$dialog = New-Object System.Windows.Forms.OpenFileDialog;
+$dialog.Title = '{_ps_literal(title)}';
+$dialog.Filter = '{_ps_literal(file_filter)}';
+$dialog.InitialDirectory = '{_ps_literal(initial_dir)}';
+$dialog.CheckFileExists = $true;
+$dialog.Multiselect = $false;
+$dialog.RestoreDirectory = $true;
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+    [Console]::Out.Write($dialog.FileName);
+}}
+$dialog.Dispose();
+"""
+    return _run_windows_dialog(script)
+
+
+def _choose_folder(title: str, initial: str | None = None) -> str | None:
+    initial_dir = _dialog_initial_directory(initial)
+    script = f"""
+Add-Type -AssemblyName System.Windows.Forms;
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog;
+$dialog.Description = '{_ps_literal(title)}';
+$dialog.SelectedPath = '{_ps_literal(initial_dir)}';
+$dialog.ShowNewFolderButton = $true;
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{
+    [Console]::Out.Write($dialog.SelectedPath);
+}}
+$dialog.Dispose();
+"""
+    return _run_windows_dialog(script)
+
+
+def _browse_into_state(
+    state_key: str,
+    title: str,
+    *,
+    folder: bool = False,
+    file_filter: str = "All files|*.*",
+) -> None:
+    try:
+        current = st.session_state.get(state_key, "")
+        selected = _choose_folder(title, current) if folder else _choose_file(title, file_filter, current)
+        if selected:
+            st.session_state[state_key] = selected
+    except Exception as exc:
+        st.session_state["native_dialog_error"] = str(exc)
+
+
+def _path_picker(
+    label: str,
+    state_key: str,
+    *,
+    default: str = "",
+    placeholder: str | None = None,
+    folder: bool = False,
+    file_filter: str = "All files|*.*",
+) -> str:
+    if state_key not in st.session_state:
+        st.session_state[state_key] = default
+
+    path_col, browse_col = st.columns([4, 1], vertical_alignment="bottom")
+    with path_col:
+        st.text_input(label, key=state_key, placeholder=placeholder)
+    with browse_col:
+        st.button(
+            "Browse",
+            key=f"browse_{state_key}",
+            width="stretch",
+            help=f"Choose {label.lower()} from this computer",
+            on_click=_browse_into_state,
+            args=(state_key, f"Choose {label}"),
+            kwargs={"folder": folder, "file_filter": file_filter},
+        )
+    return str(st.session_state.get(state_key, ""))
 
 
 def _candidate_rows(analysis: dict, review: dict) -> list[dict]:
@@ -43,21 +175,47 @@ def _candidate_rows(analysis: dict, review: dict) -> list[dict]:
 
 def main() -> None:
     st.set_page_config(page_title="HighlightMiner", page_icon="⛏️", layout="wide")
-    st.title("⛏️ HighlightMiner")
-    st.caption("Local VOD scrubber: audio + Whisper transcript + optional chat → ranked moments → review → export.")
+
+    with st.container(border=True):
+        st.title("⛏️ HighlightMiner")
+        st.caption("Mine long VODs for the moments worth keeping — audio + Whisper + optional chat, ranked locally on your machine.")
 
     with st.sidebar:
-        st.header("Source")
-        video_path = st.text_input("VOD path", value=st.session_state.get("video_path", ""), placeholder=r"D:\VODs\stream.mp4")
-        chat_path = st.text_input("Chat file (optional)", value=st.session_state.get("chat_path", ""), placeholder="TwitchDownloader JSON / JSONL / CSV")
-        work_dir = st.text_input("Work folder", value=st.session_state.get("work_dir", _default_work_dir()))
-        settings_path = st.text_input("Settings", value=st.session_state.get("settings_path", _default_settings_path()))
+        st.header("🎬 Source")
+        st.caption("Choose local files directly. HighlightMiner reads them in place; the VOD is not uploaded through the browser.")
 
-        if st.button("Analyze VOD", type="primary", width="stretch"):
-            st.session_state.video_path = video_path
-            st.session_state.chat_path = chat_path
-            st.session_state.work_dir = work_dir
-            st.session_state.settings_path = settings_path
+        video_path = _path_picker(
+            "VOD",
+            "video_path_input",
+            default=st.session_state.get("video_path", ""),
+            placeholder=r"D:\VODs\stream.mp4",
+            file_filter=_VIDEO_FILTER,
+        )
+        chat_path = _path_picker(
+            "Chat file (optional)",
+            "chat_path_input",
+            default=st.session_state.get("chat_path", ""),
+            placeholder="TwitchDownloader JSON / JSONL / CSV",
+            file_filter=_CHAT_FILTER,
+        )
+        work_dir = _path_picker(
+            "Work folder",
+            "work_dir_input",
+            default=st.session_state.get("work_dir", _default_work_dir()),
+            folder=True,
+        )
+        settings_path = _path_picker(
+            "Settings",
+            "settings_path_input",
+            default=st.session_state.get("settings_path", _default_settings_path()),
+            file_filter=_JSON_FILTER,
+        )
+
+        dialog_error = st.session_state.pop("native_dialog_error", None)
+        if dialog_error:
+            st.error(dialog_error)
+
+        if st.button("⛏️ Analyze VOD", type="primary", width="stretch"):
             try:
                 settings = Settings.from_file(settings_path if settings_path else None)
                 status = st.status("Analyzing…", expanded=True)
@@ -70,14 +228,19 @@ def main() -> None:
 
                 analysis_path = analyze_vod(video_path, work_dir, settings, chat_path or None, progress)
                 st.session_state.analysis_path = str(analysis_path)
+                st.session_state.analysis_path_input = str(analysis_path)
                 status.update(label="Analysis complete", state="complete", expanded=False)
             except Exception as exc:
                 st.exception(exc)
 
         st.divider()
-        analysis_path_text = st.text_input(
-            "Existing analysis.json",
-            value=st.session_state.get("analysis_path", str(Path(work_dir) / "analysis.json")),
+        st.subheader("📂 Existing analysis")
+        default_analysis = st.session_state.get("analysis_path", str(Path(work_dir) / "analysis.json"))
+        analysis_path_text = _path_picker(
+            "analysis.json",
+            "analysis_path_input",
+            default=default_analysis,
+            file_filter=_JSON_FILTER,
         )
         if st.button("Load analysis", width="stretch"):
             st.session_state.analysis_path = analysis_path_text
@@ -97,7 +260,7 @@ def main() -> None:
 
     analysis_path = Path(st.session_state.get("analysis_path", analysis_path_text))
     if not analysis_path.exists():
-        st.info("Enter a local VOD path in the sidebar and run **Analyze VOD**.")
+        st.info("Choose a local VOD in the sidebar and run **Analyze VOD**, or browse to an existing `analysis.json`.")
         return
 
     analysis = load_json(analysis_path)
@@ -105,6 +268,7 @@ def main() -> None:
     review_path = analysis_path.with_name("review.json")
     review = load_review(review_path, analysis)
 
+    st.subheader("📊 Analysis overview")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Candidates", len(candidates))
     c2.metric("Kept", sum(x.get("status") == "keep" for x in review["items"].values()))
@@ -116,7 +280,7 @@ def main() -> None:
         st.warning("No candidates cleared the current threshold. Lower `min_candidate_score` in settings.json and analyze again.")
         return
 
-    st.subheader("Ranked candidates")
+    st.subheader("⛏️ Ranked candidates")
     st.dataframe(_candidate_rows(analysis, review), width="stretch", hide_index=True)
 
     labels = [f"{c['id']} · {c['score'] * 10:.1f}/10 · {format_time(c['peak_time'])} · {c['reason']}" for c in candidates]
@@ -125,7 +289,7 @@ def main() -> None:
     cand = candidates[idx]
     item = review["items"][cand["id"]]
 
-    st.subheader(f"{cand['id']} — {cand['reason']}")
+    st.subheader(f"🎞️ {cand['id']} — {cand['reason']}")
 
     left, right = st.columns(2)
     with left:
@@ -187,7 +351,13 @@ def main() -> None:
         st.success("Saved")
 
     st.divider()
-    export_dir = st.text_input("Export folder", value=str(analysis_path.parent / "clips"))
+    st.subheader("📦 Export")
+    export_dir = _path_picker(
+        "Export folder",
+        "export_dir_input",
+        default=str(analysis_path.parent / "clips"),
+        folder=True,
+    )
     kept = [(c, review["items"][c["id"]]) for c in candidates if review["items"][c["id"]].get("status") == "keep"]
     if st.button(f"Export {len(kept)} kept clip(s)", disabled=not kept, type="primary"):
         exported = []
