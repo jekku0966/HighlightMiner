@@ -180,7 +180,7 @@ Analyze with chat and content label:
 ```powershell
 .\.venv\Scripts\python.exe -m highlightminer analyze "D:\VODs\stream.mp4" `
   --chat "D:\VODs\stream_chat.json" `
-  --content-label "Overwatch 2" `
+  --content "Overwatch 2" `
   --work-dir ".\highlightminer_work"
 ```
 
