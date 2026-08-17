@@ -24,6 +24,16 @@ for package in ("streamlit", "faster_whisper", "ctranslate2", "webview"):
     binaries += package_binaries
     hiddenimports += package_hidden
 
+# app.py is loaded dynamically by Streamlit from its bundled source path, so
+# PyInstaller cannot discover these imports from launcher.py on its own.
+hiddenimports += [
+    "highlightminer.ui_common",
+    "highlightminer.ui_mine",
+    "highlightminer.ui_settings",
+    "highlightminer.settings_store",
+    "highlightminer.settings_presets",
+]
+
 # pywebview chooses its Windows renderer dynamically. Keep the modern WebView2
 # backend and pythonnet bridge explicit so the frozen build cannot lose them.
 hiddenimports += [
