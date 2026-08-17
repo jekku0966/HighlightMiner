@@ -26,7 +26,14 @@ def _progress(message: str, value: float) -> None:
 
 def cmd_analyze(args: argparse.Namespace) -> int:
     settings = Settings.from_file(args.settings)
-    out = analyze_vod(args.video, args.work_dir, settings, args.chat, _progress)
+    out = analyze_vod(
+        args.video,
+        args.work_dir,
+        settings,
+        args.chat,
+        _progress,
+        content_label=args.content,
+    )
     print(out)
     return 0
 
@@ -187,7 +194,16 @@ def cmd_export(args: argparse.Namespace) -> int:
         return 2
 
     for c, r in chosen:
-        out = export_clip(analysis["video_path"], out_dir, c["id"], r["start"], r["end"], r.get("title") or None)
+        category = c.get("content_label") or analysis.get("content_label")
+        out = export_clip(
+            analysis["video_path"],
+            out_dir,
+            c["id"],
+            r["start"],
+            r["end"],
+            r.get("title") or None,
+            category=category,
+        )
         print(out)
     return 0
 
@@ -203,6 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze = sub.add_parser("analyze", help="Analyze a local VOD")
     analyze.add_argument("video")
     analyze.add_argument("--chat", default=None, help="Optional chat JSON/JSONL/CSV")
+    analyze.add_argument("--content", default=None, help="Content/game label used for organization and future preference learning")
     analyze.add_argument("--work-dir", default=str(app_root() / "highlightminer_work"))
     analyze.add_argument("--settings", default=str(app_root() / "settings.json"))
     analyze.set_defaults(func=cmd_analyze)
