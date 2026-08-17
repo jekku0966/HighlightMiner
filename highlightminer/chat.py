@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import csv
 import json
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
 
+from .security import MAX_JSON_LINE_BYTES, MAX_JSON_NESTING, validate_chat_file
 from .util import parse_time
 
 # Parser is an original permissive implementation for common chat-export shapes.
@@ -58,21 +58,23 @@ def _record_from_dict(d: dict) -> dict | None:
     return {"time": t, "text": text} if text else None
 
 
-def _walk_json(obj: Any) -> Iterable[dict]:
+def _walk_json(obj: Any, depth: int = 0) -> Iterable[dict]:
+    if depth > MAX_JSON_NESTING:
+        raise ValueError(f"Chat JSON nesting exceeds the safety limit ({MAX_JSON_NESTING}).")
     if isinstance(obj, dict):
         rec = _record_from_dict(obj)
         if rec:
             yield rec
         for value in obj.values():
             if isinstance(value, (dict, list)):
-                yield from _walk_json(value)
+                yield from _walk_json(value, depth + 1)
     elif isinstance(obj, list):
         for item in obj:
-            yield from _walk_json(item)
+            yield from _walk_json(item, depth + 1)
 
 
 def load_chat(path: str | Path) -> list[dict]:
-    p = Path(path)
+    p = validate_chat_file(path)
     suffix = p.suffix.lower()
     records: list[dict] = []
 
@@ -84,7 +86,11 @@ def load_chat(path: str | Path) -> list[dict]:
                     records.append(rec)
     elif suffix in {".jsonl", ".ndjson"}:
         with p.open("r", encoding="utf-8") as f:
-            for line in f:
+            for line_no, line in enumerate(f, start=1):
+                if len(line) > MAX_JSON_LINE_BYTES:
+                    raise ValueError(
+                        f"Chat JSON line {line_no} exceeds the safety limit ({MAX_JSON_LINE_BYTES:,} characters)."
+                    )
                 line = line.strip()
                 if not line:
                     continue
@@ -113,7 +119,6 @@ def analyze_chat(records: list[dict], duration: float, bucket_sec: float = 1.0) 
     # Compare each second against a local ~60s baseline. +1 keeps quiet chats sane.
     window = max(3, int(round(60.0 / bucket_sec)))
     kernel = np.ones(window, dtype=np.float32) / window
-    # Edge padding prevents the first/last buckets from looking artificially bursty.
     left = window // 2
     right = window - 1 - left
     padded = np.pad(counts, (left, right), mode="edge")
