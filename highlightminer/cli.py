@@ -28,6 +28,7 @@ from .security import validate_local_video
 from .storage import (
     default_db_path,
     import_legacy_analysis,
+    learning_summary,
     list_analyses,
     load_analysis,
     record_export,
@@ -51,21 +52,24 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         _progress,
         content_label=args.content,
         db_path=args.db,
+        reuse_features=not args.no_reuse,
     )
+    analysis = load_analysis(args.db, analysis_id)
     print(f"Analysis ID: {analysis_id}")
+    print(f"Source run: {analysis.get('run_number', 1)}")
+    reused = analysis.get("cache", {}).get("reused_stages", [])
+    print(f"Reused stages: {', '.join(reused) if reused else 'none'}")
     print(f"Database: {Path(args.db).expanduser().resolve()}")
     return 0
 
 
 def _streamlit_app_path() -> Path:
-    """Return the raw app.py path Streamlit needs to execute."""
     if is_frozen():
         return bundled_path("highlightminer", "app.py")
     return Path(__file__).resolve().with_name("app.py")
 
 
 def _run_streamlit_child(app_path: str) -> int:
-    """Run Streamlit inside a frozen child process without opening a browser."""
     path = Path(app_path).resolve()
     if not path.is_file():
         print(f"Bundled Streamlit app not found: {path}", file=sys.stderr, flush=True)
@@ -89,7 +93,6 @@ def _run_streamlit_child(app_path: str) -> int:
     }
     bootstrap.load_config_options(flag_options=flag_options)
     check_credentials()
-
     print(f"Starting embedded Streamlit server for {main_script_path}", flush=True)
     bootstrap.run(main_script_path, False, [], flag_options)
     return 0
@@ -121,7 +124,6 @@ def _stop_ui_process(process: subprocess.Popen) -> None:
 
 
 def _monitor_ui_process(process: subprocess.Popen, shutdown_file: Path) -> bool:
-    """Monitor browser/server fallback modes until exit or UI shutdown request."""
     shutdown_requested = False
     while process.poll() is None:
         if shutdown_file.exists():
@@ -166,7 +168,6 @@ def cmd_ui(args: argparse.Namespace | None = None) -> int:
     desktop_closed_normally = False
     try:
         wait_for_server(process, url=UI_URL, timeout=60.0)
-
         if mode == "desktop":
             try:
                 run_desktop_shell(process, shutdown_file, url=UI_URL)
@@ -187,9 +188,8 @@ def cmd_ui(args: argparse.Namespace | None = None) -> int:
             shutdown_requested = _monitor_ui_process(process, shutdown_file)
         elif mode == "server":
             shutdown_requested = _monitor_ui_process(process, shutdown_file)
-        else:  # resolve_ui_mode validates this, but keep the boundary explicit.
+        else:
             raise RuntimeError(f"Unsupported UI mode: {mode}")
-
     except KeyboardInterrupt:
         print("\nStopping HighlightMiner UI...", flush=True)
     finally:
@@ -211,10 +211,22 @@ def cmd_history(args: argparse.Namespace) -> int:
         return 0
     for row in rows:
         print(
-            f"{row['id']}  {row['created_at']}  {row['content_label']}  "
+            f"{row['id']}  run={row['run_number']}  {row['created_at']}  {row['content_label']}  "
             f"{row['video_name']}  candidates={row['candidates']} "
-            f"kept={row['kept']} rejected={row['rejected']}"
+            f"kept={row['kept']} rejected={row['rejected']} unreviewed={row['unreviewed']}"
         )
+    return 0
+
+
+def cmd_learning_stats(args: argparse.Namespace) -> int:
+    stats = learning_summary(args.db)
+    print("HighlightMiner learning dataset")
+    print(f"Total candidates: {stats['total']}")
+    print(f"Keep:             {stats['kept']}")
+    print(f"Reject:           {stats['rejected']}")
+    print(f"Unreviewed:       {stats['unreviewed']}")
+    print(f"Exported:         {stats['exported']}")
+    print("Unreviewed candidates are preserved as unlabeled examples, not treated as rejects.")
     return 0
 
 
@@ -265,27 +277,28 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor", help="Check FFmpeg, desktop UI, faster-whisper, CUDA, and NVENC")
     doctor.set_defaults(func=lambda a: run_doctor())
 
-    analyze = sub.add_parser("analyze", help="Analyze a local VOD and store it in SQLite")
+    analyze = sub.add_parser("analyze", help="Analyze a local VOD and store a new SQLite analysis run")
     analyze.add_argument("video")
     analyze.add_argument("--chat", default=None, help="Optional chat JSON/JSONL/CSV")
     analyze.add_argument("--content", default=None, help="Content/game label")
     analyze.add_argument("--work-dir", default=str(app_root() / "highlightminer_work"))
     analyze.add_argument("--settings", default=str(app_root() / "settings.json"))
     analyze.add_argument("--db", default=default_db, help="SQLite database path")
+    analyze.add_argument("--no-reuse", action="store_true", help="Force fresh audio/transcript/chat processing")
     analyze.set_defaults(func=cmd_analyze)
 
     ui = sub.add_parser("ui", help="Launch the local review UI")
-    ui.add_argument(
-        "--browser",
-        action="store_true",
-        help="Open the UI in the system browser instead of the Windows desktop shell",
-    )
+    ui.add_argument("--browser", action="store_true", help="Use system browser instead of Windows desktop shell")
     ui.set_defaults(func=cmd_ui)
 
     history = sub.add_parser("history", help="List analyses stored in SQLite")
     history.add_argument("--db", default=default_db)
     history.add_argument("--limit", type=int, default=50)
     history.set_defaults(func=cmd_history)
+
+    learning = sub.add_parser("learning-stats", help="Show Keep/Reject/Unreviewed dataset counts")
+    learning.add_argument("--db", default=default_db)
+    learning.set_defaults(func=cmd_learning_stats)
 
     legacy = sub.add_parser("import-legacy", help="Import a v0.1 analysis.json into SQLite")
     legacy.add_argument("analysis_json")
