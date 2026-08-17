@@ -9,9 +9,12 @@ from .categorization import normalize_content_label
 from .chat import analyze_chat, load_chat
 from .config import Settings
 from .identity import describe_source, full_file_sha256, stable_signature
+from .learning import rerank_candidates
+from .learning_store import prepare_preference_model
 from .media import extract_analysis_audio, probe_media
 from .scoring import find_candidates
 from .security import validate_chat_file, validate_local_video
+from .settings_presets import detect_weight_preset
 from .storage import (
     ALGORITHM_VERSION,
     FEATURE_SCHEMA_VERSION,
@@ -91,21 +94,19 @@ def analyze_vod(
     audio, and chat feature stages are reused from prior runs by default; the
     candidate ranking and review state are always new for each run.
 
-    ``source_info`` is only a UI optimization hint. Source identity is always
-    re-derived from the actual validated VOD before cache lookup so stale UI
-    state cannot attach a different file to the wrong source history.
+    Preference learning is a conservative reranker layered on top of the
+    heuristic candidate generator. Any learner failure falls back to the base
+    ranking rather than blocking analysis.
     """
     progress = progress or _noop
     video = validate_local_video(video_path)
     work = ensure_dir(work_dir)
     normalized_content_label = normalize_content_label(content_label)
+    mining_profile = detect_weight_preset(settings.weights)
 
     progress("Identifying source VOD", 0.01)
     actual_source = describe_source(video)
     if source_info and source_info.get("fingerprint") == actual_source["fingerprint"]:
-        # Keep the freshly resolved path/size/name while accepting that the UI
-        # already recognized this source. register_source resolves the DB row by
-        # fingerprint either way.
         actual_source["fingerprint"] = str(source_info["fingerprint"])
     source = register_source(db_path, actual_source)
     signatures = _stage_signatures(settings, chat_path)
@@ -200,11 +201,53 @@ def analyze_vod(
         )
         for candidate in candidates:
             candidate["content_label"] = normalized_content_label
+            features = dict(candidate.get("features") or {})
+            features["context"] = {
+                "content_label": normalized_content_label,
+                "mining_profile": mining_profile,
+            }
+            candidate["features"] = features
+
+        learning_info: dict = {
+            "active": False,
+            "state": "warming_up",
+            "reason": "Preference learner has not been prepared yet.",
+            "content_label": normalized_content_label,
+            "mining_profile": mining_profile,
+        }
+        try:
+            progress("Applying personal reranker", 0.92)
+            prepared_learning = prepare_preference_model(db_path)
+            candidates, learning_info = rerank_candidates(
+                candidates,
+                prepared_learning.model,
+                model_id=prepared_learning.model_id,
+                content_label=normalized_content_label,
+                mining_profile=mining_profile,
+            )
+            learning_info.update(
+                {
+                    "state": prepared_learning.training.state,
+                    "reason": prepared_learning.training.reason,
+                    "reused_existing_model": prepared_learning.reused_existing_model,
+                }
+            )
+        except Exception as exc:
+            # Learning must never take the known-good heuristic detector down.
+            learning_info = {
+                "active": False,
+                "state": "error",
+                "reason": f"Learner disabled for this run: {type(exc).__name__}: {exc}",
+                "content_label": normalized_content_label,
+                "mining_profile": mining_profile,
+            }
 
         cache_info = {
             "reused": cache_from,
             "reused_stages": sorted(cache_from),
             "reuse_enabled": bool(reuse_features),
+            "mining_profile": mining_profile,
+            "learning": learning_info,
         }
         analysis = {
             "version": 2,
@@ -233,7 +276,8 @@ def analyze_vod(
         )
         reused = ", ".join(sorted(cache_from))
         suffix = f" · reused {reused}" if reused else ""
-        progress(f"Done — {len(candidates)} candidates{suffix}", 1.0)
+        learning_suffix = " · personalized" if learning_info.get("active") else ""
+        progress(f"Done — {len(candidates)} candidates{suffix}{learning_suffix}", 1.0)
         return analysis_id
     finally:
         if wav is not None:
