@@ -6,6 +6,13 @@ All notable changes to HighlightMiner will be documented here.
 
 ### Added
 
+- Added a dedicated in-app **Settings** page backed by `highlightminer.db`, so normal desktop use no longer requires hand-editing `settings.json`.
+- Added **Balanced**, **Reaction-heavy**, **Chat-heavy**, and **Audio-heavy** signal-weight presets plus a **Custom** state for manual weighting.
+- Added `0.00–1.00` signal-weight sliders with normalized effective percentages and automatic no-chat renormalization.
+- Added in-app editing for Whisper/inference options, highlight thresholds/timing, audio-analysis windows, and reaction phrases.
+- Added Settings **Save**, **Reset defaults**, JSON **Import**, and JSON **Export** flows. Existing `settings.json` is imported once when no database settings profile exists, then SQLite becomes authoritative for the desktop app.
+- Added regression tests for preset normalization/detection, database settings persistence, JSON import/export, and Settings UI module imports.
+- Added `SETTINGS.md` documenting the settings database, presets, normalization, migration, and backup behavior.
 - Added source-aware VOD identity and rerun history. A sampled content fingerprint groups multiple analysis runs of the same physical VOD without using the filename/path as identity.
 - Added stage-aware rerun reuse for audio features, Whisper transcripts, and chat features. Compatible reruns can skip expensive processing and rerank from cached evidence.
 - Added **Load latest**, **Analyze again**, and **Force full reprocess** behavior when the UI detects that a VOD has already been analyzed.
@@ -22,6 +29,9 @@ All notable changes to HighlightMiner will be documented here.
 
 ### Changed
 
+- The desktop Mine/Review flow now reads the active Settings profile from SQLite; each analysis still stores an immutable settings snapshot for historical comparison and future preference learning.
+- The old Settings-file picker was removed from normal Mine/Review UI. JSON remains a validated migration/interchange/backup format rather than the primary desktop configuration surface.
+- PyInstaller explicitly bundles the Settings/Mine UI modules that are dynamically imported by Streamlit, and Windows packaging includes `SETTINGS.md`.
 - Existing v0.2 SQLite databases are migrated in place to the source/run schema; existing generated analysis history is retained.
 - Changing only scoring settings no longer requires another Whisper pass when a compatible transcript is available. Reaction phrases rescore cached transcript text without invalidating transcription.
 - Chat reuse keys include a full SHA-256 of the selected chat file; VOD source fingerprints are deliberately sampled identity keys rather than security/integrity hashes.
