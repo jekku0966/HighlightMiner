@@ -6,11 +6,11 @@ HighlightMiner is a local-first desktop application. The Streamlit backend is bo
 
 The `v0.2-dev` branch introduces guard rails around untrusted inputs and persistent state:
 
-- Analysis, transcript, candidate, review, rerun, and export history is stored in a local SQLite database instead of writable JSON state files.
+- Analysis, transcript, candidate, review, rerun, export history, and the active desktop settings profile are stored in a local SQLite database instead of scattered writable JSON state files.
 - Source VODs and imported legacy analyses must reference regular local files. Automatic UNC/network-path access is rejected.
-- Chat and settings inputs have extension and size limits, and recursive chat JSON has a nesting limit.
-- Standard faster-whisper model names are allowed by default. Arbitrary custom model repositories require explicit `allow_custom_whisper_model=true`.
-- Numeric settings and scoring weights are range-validated before analysis begins.
+- Chat and settings JSON inputs have extension and size limits, and recursive chat JSON has a nesting limit.
+- Standard faster-whisper model names are allowed by default. Arbitrary custom model repositories require explicit opt-in in the Settings UI or `allow_custom_whisper_model=true` in an imported profile.
+- Numeric settings and scoring weights are range-validated before a settings profile can be used for analysis.
 - GitHub Actions dependencies are pinned to full commit SHAs and the workflow token is read-only.
 - Release builds generate a SHA-256 checksum for the portable ZIP.
 
@@ -47,6 +47,17 @@ If WebView2 or the packaged pywebview backend cannot initialize, HighlightMiner 
 HighlightMiner.exe ui --browser
 ```
 
+## Settings profiles
+
+Normal desktop settings are stored in `highlightminer.db`. `settings.json` remains a migration/interchange format rather than a secrets file.
+
+- The first database settings load may import the trusted local/package `settings.json` so existing defaults and reaction phrases are retained.
+- Explicit JSON imports pass through local-file, extension, size, model, and numeric validation before replacing the active profile.
+- Custom Hugging Face Whisper repositories require an explicit advanced opt-in because selecting one can cause network access and model/data downloads through the normal faster-whisper/Hugging Face stack.
+- Settings export rejects UNC/network destinations by default.
+
+Neither SQLite settings nor exported JSON profiles are encrypted. Do not put credentials, API keys, tokens, or other secrets in them.
+
 ## Local data
 
 `highlightminer.db` may contain:
@@ -57,7 +68,8 @@ HighlightMiner.exe ui --browser
 - transcript text from analyzed VODs;
 - Keep/Reject/Unreviewed decisions and edited clip timings;
 - review-event history;
-- exported clip paths and timestamps.
+- exported clip paths and timestamps;
+- the active application settings profile, including reaction phrases and model preferences.
 
 The database is SQLite, not encrypted. Anyone who can read the file can inspect it with SQLite tooling. Do not treat it as a secrets store.
 
@@ -73,7 +85,7 @@ Expected network access includes the first-time faster-whisper model download th
 
 ## CI and release integrity
 
-The Windows build workflow uses read-only repository permission, pins GitHub Actions to immutable commit SHAs, runs unit tests, smoke-tests frozen CTranslate2/faster-whisper and pywebview/WebView2 imports, smoke-tests the packaged Streamlit backend in server-only mode, and generates `SHA256SUMS.txt` for the release ZIP.
+The Windows build workflow uses read-only repository permission, pins GitHub Actions to immutable commit SHAs, runs unit tests, smoke-tests frozen CTranslate2/faster-whisper and pywebview/WebView2 imports, smoke-tests the packaged Streamlit backend in server-only mode, verifies bundled user documentation, and generates `SHA256SUMS.txt` for the release ZIP.
 
 The release SHA-256 protects against modification after publication only when the checksum itself is obtained from a trusted location.
 
