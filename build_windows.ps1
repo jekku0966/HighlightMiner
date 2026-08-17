@@ -83,7 +83,7 @@ if (-not (Test-Path $exePath)) {
 
 Write-Host ""
 Write-Host "Adding user-facing files..."
-foreach ($name in @("settings.json", "README.md", "CUDA_SETUP.md", "ATTRIBUTIONS.md", "LICENSE")) {
+foreach ($name in @("settings.json", "README.md", "CUDA_SETUP.md", "ATTRIBUTIONS.md", "SECURITY.md", "LICENSE")) {
     $source = Join-Path $repoRoot $name
     if (Test-Path $source) {
         Copy-Item $source (Join-Path $distRoot $name) -Force
@@ -167,6 +167,7 @@ if ($ffmpegCopied -and $missingCoreCuda.Count -eq 0) {
 }
 
 $zipPath = Join-Path $repoRoot "dist\$packageName.zip"
+$checksumPath = Join-Path $repoRoot "dist\SHA256SUMS.txt"
 if (-not $SkipZip) {
     Write-Host ""
     Write-Host "Creating portable ZIP..."
@@ -174,6 +175,10 @@ if (-not $SkipZip) {
         Remove-Item $zipPath -Force
     }
     Compress-Archive -Path $distRoot -DestinationPath $zipPath -CompressionLevel Optimal
+
+    $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$hash  $packageName.zip" | Set-Content -Path $checksumPath -Encoding ascii
+    Write-Host "SHA-256: $hash"
 }
 
 Write-Host ""
@@ -181,6 +186,7 @@ Write-Host "Build complete." -ForegroundColor Green
 Write-Host "Executable folder: $distRoot"
 if (-not $SkipZip) {
     Write-Host "Portable ZIP:      $zipPath"
+    Write-Host "Checksum file:     $checksumPath"
 }
 Write-Host ""
 Write-Host "Double-click HighlightMiner.exe to launch the UI."
