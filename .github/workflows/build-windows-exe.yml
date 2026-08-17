@@ -13,6 +13,7 @@ on:
       - "README.md"
       - "V0.2_DEV.md"
       - "RERUNS_AND_LEARNING.md"
+      - "SETTINGS.md"
       - "CUDA_SETUP.md"
       - "ATTRIBUTIONS.md"
       - "SECURITY.md"
@@ -61,6 +62,7 @@ jobs:
             ".\dist\HighlightMiner\README.md",
             ".\dist\HighlightMiner\V0.2_DEV.md",
             ".\dist\HighlightMiner\RERUNS_AND_LEARNING.md",
+            ".\dist\HighlightMiner\SETTINGS.md",
             ".\dist\HighlightMiner\SECURITY.md"
           )
           foreach ($path in $required) {
