@@ -4,6 +4,8 @@ All notable changes to HighlightMiner will be documented here.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-17
+
 ### Changed
 
 - Updated `setup.ps1` to match the current portable FFmpeg/ffprobe workflow.
@@ -26,14 +28,18 @@ All notable changes to HighlightMiner will be documented here.
 - Double-clicking a frozen `HighlightMiner.exe` now launches the UI automatically; packaged CLI subcommands remain available.
 - The packaged Streamlit server now skips Streamlit's first-run email prompt, disables Streamlit usage-statistics telemetry, runs with development mode disabled, and binds only to `127.0.0.1:8501`.
 - Added `HighlightMiner.spec`, the `packaging` dependency group, frozen-path tests, and `build_windows.ps1` for reproducible PyInstaller onedir Windows builds.
-- The Windows build script runs tests, freezes the app, copies user-facing files plus locally supplied FFmpeg/CUDA runtime files, smoke-tests the executable, and creates `dist/HighlightMiner-Windows-x64.zip`.
-- Added `BUILD_WINDOWS.md` documenting the portable executable layout, build process, frozen launcher behavior, and third-party runtime policy.
+- The Windows build script runs tests, freezes the app, copies user-facing files plus locally supplied FFmpeg/CUDA runtime files, smoke-tests the executable, and creates a versioned `dist/HighlightMiner-v<version>-windows-x64.zip` archive.
+- The project version in `pyproject.toml` is now the source of truth for Windows release archive naming.
+- Windows release packaging explicitly validates the x64 architecture rather than silently producing a misleading package name on another architecture.
+- GitHub Actions reads the same project version and publishes a matching version/platform/architecture-named build artifact.
+- Added `BUILD_WINDOWS.md` documenting the portable executable layout, build process, frozen launcher behavior, third-party runtime policy, and release archive naming convention.
 - Added a GitHub Actions Windows packaging workflow. A clean Windows runner now validates all unit tests, the PyInstaller build, the bundled Streamlit script, frozen CTranslate2/faster-whisper imports, a live HTTP response from the packaged Streamlit server, and artifact creation before the build is accepted.
 - Added native Windows **Browse** controls for VODs, chat files, work folders, settings, existing `analysis.json` files, and export folders. The picker returns filesystem paths directly instead of uploading large media through the browser.
 - Refreshed the Streamlit UI with a dedicated HighlightMiner dark graphite/amber theme, clearer section labels, and a more app-like header. The supported `.streamlit/config.toml` theme is copied into portable Windows builds automatically.
 - Added a per-VOD **Content / Game** label in Streamlit and a matching CLI `--content` option. The normalized label is stored in `analysis.json` and copied onto each ranked candidate so future preference learning has historical context.
 - Kept clips now export into a category subfolder beneath the selected clips directory, such as `clips/Overwatch 2/`. Blank or legacy analyses fall back to `Unsorted`.
 - Category folder names preserve readable Unicode while sanitizing invalid Windows path characters and reserved device names.
+- Added dedicated `v0.1.2` release notes covering the Windows package, install flow, compatibility, and early-alpha caveats.
 
 ## [0.1.1] - 2026-08-16
 
