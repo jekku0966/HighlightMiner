@@ -125,10 +125,12 @@ jobs:
             if (Test-Path $stderrLog) { Get-Content $stderrLog | Out-Host }
           }
 
-      - name: Upload Windows portable ZIP
+      - name: Upload Windows portable ZIP and checksum
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: HighlightMiner-v${{ steps.project.outputs.version }}-windows-x64
-          path: dist/HighlightMiner-v${{ steps.project.outputs.version }}-windows-x64.zip
+          path: |
+            dist/HighlightMiner-v${{ steps.project.outputs.version }}-windows-x64.zip
+            dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
