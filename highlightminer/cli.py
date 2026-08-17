@@ -178,7 +178,12 @@ def cmd_ui(args: argparse.Namespace | None = None) -> int:
         wait_for_server(process, url=UI_URL, timeout=60.0)
         if mode == "desktop":
             try:
-                run_desktop_shell(process, shutdown_file, url=UI_URL)
+                run_desktop_shell(
+                    process,
+                    shutdown_file,
+                    url=UI_URL,
+                    stop_backend=lambda: _stop_ui_process(process),
+                )
                 shutdown_requested = shutdown_file.exists()
                 desktop_closed_normally = process.poll() is None or shutdown_requested
             except Exception as exc:
