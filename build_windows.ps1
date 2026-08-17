@@ -8,8 +8,24 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repoRoot
 
+$pyprojectPath = Join-Path $repoRoot "pyproject.toml"
+$pyprojectText = Get-Content $pyprojectPath -Raw
+if ($pyprojectText -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+    throw "Could not read project version from pyproject.toml."
+}
+$version = $Matches[1]
+
+$hostArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+if ($hostArchitecture -ne "X64") {
+    throw "HighlightMiner Windows release packaging currently supports x64 only. Detected architecture: $hostArchitecture"
+}
+
+$packageName = "HighlightMiner-v$version-windows-x64"
+
 Write-Host "HighlightMiner Windows build"
 Write-Host "============================"
+Write-Host "Version:      $version"
+Write-Host "Architecture: windows-x64"
 Write-Host ""
 
 $buildVenv = Join-Path $repoRoot ".build-venv"
@@ -150,7 +166,7 @@ if ($ffmpegCopied -and $missingCoreCuda.Count -eq 0) {
     }
 }
 
-$zipPath = Join-Path $repoRoot "dist\HighlightMiner-Windows-x64.zip"
+$zipPath = Join-Path $repoRoot "dist\$packageName.zip"
 if (-not $SkipZip) {
     Write-Host ""
     Write-Host "Creating portable ZIP..."
