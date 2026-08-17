@@ -4,6 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from .categorization import content_folder_name
 from .media import has_encoder, require_executable, require_ffmpeg
 from .util import ensure_dir
 
@@ -162,11 +163,13 @@ def export_clip(
     start: float,
     end: float,
     title: str | None = None,
+    category: str | None = None,
 ) -> Path:
     require_ffmpeg()
     ffmpeg = require_executable("ffmpeg")
     src = Path(video_path).expanduser().resolve()
-    out_dir = ensure_dir(output_dir)
+    base_dir = ensure_dir(output_dir)
+    out_dir = ensure_dir(base_dir / content_folder_name(category))
     duration = max(0.1, float(end) - float(start))
     stem = safe_name(f"{clip_id}_{title}" if title else clip_id)
     out = out_dir / f"{stem}.mp4"
