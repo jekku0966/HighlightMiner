@@ -1,29 +1,15 @@
 # ⛏️ HighlightMiner v0.2-dev
 
-**Experimental local-first VOD highlight detection with SQLite history, same-VOD reruns, a native Windows desktop shell, and future preference learning in mind.**
+**Experimental local-first VOD highlight detection with SQLite history, same-VOD reruns, in-app settings, a native Windows shell, and future preference learning in mind.**
 
-> **Development branch:** `v0.2-dev` — reports version `0.2.0.dev0`
->
-> Stable/simple v0.1.x remains on [`main`](https://github.com/jekku0966/HighlightMiner/tree/main).
+> Development branch: `v0.2-dev` — version `0.2.0.dev0`  
+> Stable/simple v0.1.x remains on `main`.
 
 HighlightMiner analyzes long VODs using audio excitement, local Whisper transcription, reaction-heavy speech cues, and optional chat bursts, then presents ranked candidate moments for human review.
 
 ## Windows desktop UI
 
-On Windows, Streamlit remains the UI engine but is hosted inside a native **HighlightMiner** window using pywebview + Microsoft Edge WebView2. Double-clicking `HighlightMiner.exe` no longer opens a normal browser tab.
-
-```text
-HighlightMiner.exe
-        │
-        ├── Streamlit backend on 127.0.0.1:8501
-        │
-        └── pywebview / WebView2 window
-                    │
-                    ▼
-            HighlightMiner UI
-```
-
-Closing the window shuts down the local Streamlit child process. The in-app **Exit HighlightMiner** button does the same thing.
+On Windows, Streamlit is hosted inside a native HighlightMiner window using pywebview + Microsoft Edge WebView2. Double-clicking `HighlightMiner.exe` does not need to open a normal browser tab. Closing the native window or using **Exit HighlightMiner** shuts down the local Streamlit process.
 
 Browser fallback remains available:
 
@@ -31,38 +17,44 @@ Browser fallback remains available:
 HighlightMiner.exe ui --browser
 ```
 
-## SQLite instead of JSON state
+## SQLite-backed application state
 
-Generated structured state lives in one local database:
+v0.2 keeps structured state in `highlightminer.db`: analyses, candidates, transcript/audio/chat features, source/run history, Keep/Reject/Unreviewed reviews, timing/title edits, review events, export history, and the active desktop-app settings profile.
 
 ```text
 HighlightMiner/
 ├── HighlightMiner.exe
-├── settings.json
 ├── highlightminer.db
+├── settings.json        # migration/default/interchange file; not normal UI state
 └── highlightminer_work/
     ├── .previews/
     └── clips/
 ```
 
-`settings.json` intentionally stays human-editable. The database stores analyses, candidates, transcript/audio/chat features, review state, timing/title edits, source/run history, review events, and exports.
+New analyses no longer need durable `analysis.json`, `review.json`, `transcript.json`, `audio_features.json`, or `chat_features.json` files. The temporary 16 kHz analysis WAV is deleted after useful data is committed.
 
-New v0.2 analyses no longer need durable copies of:
+## In-app Settings page
 
-```text
-analysis.json
-review.json
-transcript.json
-transcript_meta.json
-audio_features.json
-chat_features.json
-```
+Use **⚙️ Settings** in the sidebar instead of hand-editing JSON. The page provides:
 
-The temporary 16 kHz analysis WAV is deleted after useful data is committed.
+- Whisper model/device/compute/language/beam/VAD controls;
+- candidate threshold/count and clip timing controls;
+- audio analysis window/hop controls;
+- `0.00–1.00` Audio / Transcript / Chat weight sliders with effective normalized percentages;
+- editable reaction phrases;
+- **Save settings**, **Reset defaults**, **Import settings**, and **Export settings**.
+
+Signal presets are **Balanced**, **Reaction-heavy**, **Chat-heavy**, and **Audio-heavy**. Presets alter weights only; they never secretly change Whisper, thresholds, or clip timing. Manual weighting becomes **Custom**. If chat is absent, its weight becomes zero and audio/transcript are renormalized automatically.
+
+On the first database-backed settings load, HighlightMiner imports the local/package `settings.json` once so existing defaults/reaction phrases survive migration. SQLite is authoritative after that. JSON remains available for backup, sharing, and explicit import/export.
+
+Saved changes affect future analyses/reruns only. Every existing analysis retains its original settings snapshot.
+
+See `SETTINGS.md` for the complete settings contract.
 
 ## Same VOD, multiple runs
 
-v0.2 distinguishes the physical **source VOD** from an **analysis run**:
+v0.2 separates a physical source VOD from its analysis runs:
 
 ```text
 source VOD
@@ -71,53 +63,39 @@ source VOD
 └── run 3
 ```
 
-A sampled content fingerprint recognizes a byte-identical VOD without relying on filename/path. When the selected VOD already has history, the UI offers:
+A sampled content fingerprint recognizes a byte-identical VOD without relying on filename/path. When a VOD already has history, the UI offers **Load latest**, **Analyze again**, and **Force full reprocess**.
 
-- **Load latest** — reopen the newest run;
-- **Analyze again** — create a new run while reusing compatible upstream work;
-- **Force full reprocess** — create a new run and ignore cached stages.
-
-Candidate ranking always runs again. Compatible audio features, Whisper transcript, and chat features are reused independently. Changing only ranking settings can therefore turn a long rerun into a quick rerank instead of another full transcription pass.
-
-`reaction_phrases` do not invalidate the Whisper transcript; cached transcript text is simply rescored.
-
-CLI full-reprocess equivalent:
+Candidate ranking always runs again. Compatible audio features, Whisper transcript, and chat features are reused independently. Changing only scoring settings can therefore reduce a rerun to a quick rerank. Changing reaction phrases reuses compatible Whisper text and rescoring does not require retranscription.
 
 ```powershell
 HighlightMiner.exe analyze "D:\VODs\stream.mp4" --no-reuse
 ```
 
-Detailed behavior: [`RERUNS_AND_LEARNING.md`](RERUNS_AND_LEARNING.md).
+See `RERUNS_AND_LEARNING.md` for source identity/cache rules.
 
 ## Learning-ready review history
 
-v0.2 preserves explicit review semantics for the future preference learner:
+Review semantics are explicit:
 
-| Review state | Future label |
+| State | Future label |
 |---|---:|
 | Keep | `1` positive |
 | Reject | `0` negative |
-| Unreviewed | `None` / unlabeled |
+| Unreviewed | unlabeled |
 
-**Unreviewed is not a Reject.** It means the user has not supplied a preference label yet.
-
-Each candidate stores its original heuristic rank/score plus a feature snapshot containing signal scores and useful ranking context. The database also retains review-state changes, timing/title edits, export history, source/run IDs, content/game labels, and algorithm/feature-schema versions.
-
-Dataset status can be inspected with:
+Unreviewed is **not** silently treated as Reject. Candidate feature snapshots, original ranking scores, content/game labels, run/source IDs, settings snapshots, review changes, timing edits, titles, and exports are retained for the future preference reranker.
 
 ```powershell
 HighlightMiner.exe learning-stats
 ```
 
-The data plumbing is implemented. **The actual personal preference learner/reranker is not implemented yet.**
+The dataset plumbing exists; the actual personal preference learner is not implemented yet.
 
-## Review/export flow
+## Review and export
 
-The development sidebar provides local VOD/chat/settings/work-folder pickers, Content/Game, Analyze VOD, source-aware Analysis history, v0.1 import, and learning-data counts.
+The Mine / Review page provides local VOD/chat/work-folder pickers, Content/Game, source-aware history, v0.1 import, candidate previews, Keep/Reject/Unreview, timing/title editing, transcript/signal context, and export.
 
-The main area provides ranked candidates, a lightweight preview clip, timing controls, Keep/Reject/Unreview, title edits, signal/transcript information, and export.
-
-Exports use category subfolders such as:
+Exports use sanitized category folders and never silently overwrite an existing file:
 
 ```text
 clips/
@@ -126,69 +104,25 @@ clips/
     └── H003_clutch_2.mp4
 ```
 
-Existing clips are never silently overwritten; a numbered suffix is chosen and each export is recorded in SQLite.
-
 ## Legacy v0.1 import
 
-The sidebar includes **Import v0.1 analysis.json**. Select the old `analysis.json`; when companion files are present, HighlightMiner also migrates review state, transcript, audio features, and chat features into `highlightminer.db`.
-
-The referenced source VOD must still exist locally.
-
-## Analysis pipeline
-
-```text
-VOD + optional chat
-        │
-        ├── source identity / previous-run lookup
-        │
-        ├── FFmpeg analysis audio ─────────────┐
-        ├── audio features                     │ reusable when compatible
-        ├── faster-whisper transcript           │
-        └── chat features ─────────────────────┘
-                    │
-                    ▼
-              signal fusion
-                    │
-                    ▼
-             candidate ranking
-                    │
-                    ▼
-               SQLite run
-                    │
-                    ▼
-          review / export / history
-```
+Use **Import v0.1 analysis.json** in the sidebar. HighlightMiner migrates the analysis and, when present, companion review/transcript/audio/chat data into SQLite. The referenced source VOD must still exist locally.
 
 ## Security posture
 
-The development branch includes local-file validation, UNC/network-path rejection for source media, chat/settings size and extension limits, JSON nesting limits, numeric settings validation, a standard Whisper-model allow-list, loopback-only Streamlit, forced WebView2 desktop rendering, immutable GitHub Actions revisions, and SHA-256 checksums for Windows release ZIPs.
+The dev branch includes local-file validation, automatic UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, and SHA-256 release checksums.
 
-The sampled VOD fingerprint is for **same-source identity**, not security/integrity verification. See [`SECURITY.md`](SECURITY.md).
-
-## Recommended Twitch workflow
-
-Use [TwitchDownloader](https://github.com/lay295/TwitchDownloader) to obtain a matching VOD and JSON chat export:
-
-```text
-TwitchDownloader
-├── stream.mp4
-└── stream_chat.json
-        │
-        ▼
-   HighlightMiner
-```
-
-TwitchDownloader is not bundled or invoked automatically.
+The sampled VOD fingerprint is for source identity, not security/integrity verification. See `SECURITY.md`.
 
 ## Requirements
 
-- Python **3.10+** for source mode
+- Python 3.10+ for source mode
 - FFmpeg + ffprobe
 - Windows x64 for the current packaged target
-- Microsoft Edge **WebView2 Runtime** for the native window
+- Microsoft Edge WebView2 Runtime for the native window
 - NVIDIA GPU optional but useful for larger Whisper models
 
-See [`BUILD_WINDOWS.md`](BUILD_WINDOWS.md) and [`CUDA_SETUP.md`](CUDA_SETUP.md) for packaging/runtime setup.
+For Twitch VOD/chat acquisition, TwitchDownloader is the recommended companion tool; it is not bundled or invoked automatically.
 
 ## Running from source
 
@@ -201,67 +135,22 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\run.bat
 ```
 
-Environment check:
-
-```powershell
-.\.venv\Scripts\python.exe -m highlightminer doctor
-```
-
-## CLI examples
-
-Analyze:
-
-```powershell
-.\.venv\Scripts\python.exe -m highlightminer analyze "D:\VODs\stream.mp4" `
-  --chat "D:\VODs\stream_chat.json" `
-  --content "Overwatch 2"
-```
-
-Force fresh processing:
-
-```powershell
-.\.venv\Scripts\python.exe -m highlightminer analyze "D:\VODs\stream.mp4" --no-reuse
-```
-
-Other commands:
-
-```powershell
-.\.venv\Scripts\python.exe -m highlightminer ui
-.\.venv\Scripts\python.exe -m highlightminer ui --browser
-.\.venv\Scripts\python.exe -m highlightminer history
-.\.venv\Scripts\python.exe -m highlightminer learning-stats
-.\.venv\Scripts\python.exe -m highlightminer import-legacy "D:\old-run\analysis.json"
-.\.venv\Scripts\python.exe -m highlightminer export <analysis-id>
-```
-
-Use `--help` as the source of truth while the dev CLI evolves.
-
-## Testing
+Tests:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The Windows CI also validates PyInstaller, frozen CTranslate2/faster-whisper imports, the pywebview/WebView2 backend, the packaged Streamlit localhost server, ZIP generation, and checksums.
-
-Before v0.2 replaces v0.1.x, it still needs real-machine validation of migration, a fresh SQLite analysis, same-VOD cached reruns, force-full-reprocess, multi-run review/export persistence, and the eventual preference learner.
-
 ## Documentation
 
-- [`V0.2_DEV.md`](V0.2_DEV.md) — architecture/status
-- [`RERUNS_AND_LEARNING.md`](RERUNS_AND_LEARNING.md) — rerun/cache/learning contract
-- [`BUILD_WINDOWS.md`](BUILD_WINDOWS.md) — Windows build/package notes
-- [`CUDA_SETUP.md`](CUDA_SETUP.md) — CUDA/CTranslate2 setup
-- [`SECURITY.md`](SECURITY.md) — threat model/security notes
-- [`CHANGELOG.md`](CHANGELOG.md) — project changes
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution guidelines
-- [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md) — dependencies/provenance
+- `SETTINGS.md` — in-app settings, presets, import/export
+- `V0.2_DEV.md` — architecture/status
+- `RERUNS_AND_LEARNING.md` — rerun/cache/learning contract
+- `BUILD_WINDOWS.md` — Windows build/package notes
+- `CUDA_SETUP.md` — CUDA/CTranslate2 setup
+- `SECURITY.md` — threat model/security notes
+- `CHANGELOG.md` — project changes
+- `ATTRIBUTIONS.md` — dependency/provenance notes
 
-## Provenance and license
-
-HighlightMiner uses faster-whisper, CTranslate2, FFmpeg, Streamlit, pywebview, Microsoft Edge WebView2, and optionally TwitchDownloader as a companion input tool. See [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md).
-
-The project has been developed with AI coding assistance from OpenAI's ChatGPT and should be reviewed/tested like any human-authored code.
-
-HighlightMiner's own source is **MIT licensed**. Third-party dependencies/models retain their own licenses.
+HighlightMiner's own source is MIT licensed. Third-party dependencies/models retain their own licenses. The project has been developed with AI coding assistance and should be reviewed/tested like any human-authored code.
