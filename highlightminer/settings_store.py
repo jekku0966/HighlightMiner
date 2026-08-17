@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .default_settings import product_default_settings
 from .runtime import app_root
 from .security import is_network_path
 from .settings_presets import detect_weight_preset
@@ -32,14 +33,15 @@ def _from_payload(data: dict[str, Any]) -> Settings:
     return Settings(**valid)
 
 
-def _product_defaults() -> Settings:
-    packaged = app_root() / "settings.json"
-    if packaged.is_file():
+def _initial_settings() -> Settings:
+    """Migrate the old local settings.json once, then fall back to code defaults."""
+    legacy = app_root() / "settings.json"
+    if legacy.is_file():
         try:
-            return Settings.from_file(packaged)
+            return Settings.from_file(legacy)
         except Exception:
             pass
-    return Settings()
+    return product_default_settings()
 
 
 def load_app_settings(db_path: str | Path | None = None) -> Settings:
@@ -49,7 +51,7 @@ def load_app_settings(db_path: str | Path | None = None) -> Settings:
         if row is not None:
             return _from_payload(json.loads(row["settings_json"]))
 
-        settings = _product_defaults()
+        settings = _initial_settings()
         payload = settings.__dict__.copy()
         conn.execute(
             "INSERT INTO app_settings(id, settings_json, preset_name, updated_at) VALUES(1, ?, ?, ?)",
@@ -81,7 +83,7 @@ def save_app_settings(settings: Settings, db_path: str | Path | None = None) -> 
 
 
 def reset_app_settings(db_path: str | Path | None = None) -> Settings:
-    return save_app_settings(_product_defaults(), db_path)
+    return save_app_settings(product_default_settings(), db_path)
 
 
 def import_app_settings(path: str | Path, db_path: str | Path | None = None) -> Settings:
