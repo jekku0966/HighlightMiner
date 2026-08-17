@@ -45,6 +45,7 @@ def _run(cmd: list[str], capture: bool = True) -> subprocess.CompletedProcess[st
         text=True,
         capture_output=capture,
         check=True,
+        shell=False,
         encoding="utf-8",
         errors="replace",
     )
