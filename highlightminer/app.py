@@ -13,7 +13,15 @@ from highlightminer.export import create_preview_clip, export_clip
 from highlightminer.pipeline import analyze_vod
 from highlightminer.review import load_review, save_review
 from highlightminer.runtime import app_root
-from highlightminer.util import format_time, load_json
+from highlightminer.security import validate_local_video
+from highlightminer.storage import (
+    default_db_path,
+    import_legacy_analysis,
+    list_analyses,
+    load_analysis,
+    record_export,
+)
+from highlightminer.util import format_time
 
 # UI uses Streamlit public APIs documented at docs.streamlit.io.
 # No Streamlit source code is vendored; see ATTRIBUTIONS.md.
@@ -49,14 +57,12 @@ def _ps_literal(value: str) -> str:
 
 
 def _run_windows_dialog(script: str) -> str | None:
-    """Run a native Windows picker in a separate STA PowerShell process.
-
-    Browser file inputs upload file contents and intentionally hide the full
-    local path. HighlightMiner is a local application and works with very large
-    VODs, so the picker returns only the selected filesystem path instead.
-    """
+    """Run a native Windows picker in a separate STA PowerShell process."""
     if os.name != "nt":
-        raise RuntimeError("Native Browse buttons are currently available on Windows only. Enter the path manually on this platform.")
+        raise RuntimeError(
+            "Native Browse buttons are currently available on Windows only. "
+            "Enter the path manually on this platform."
+        )
 
     wrapped = (
         "$ErrorActionPreference = 'Stop';"
@@ -174,16 +180,28 @@ def _candidate_rows(analysis: dict, review: dict) -> list[dict]:
     return rows
 
 
+def _history_label(row: dict) -> str:
+    created = str(row.get("created_at", "")).replace("T", " ").replace("+00:00", " UTC")
+    return (
+        f"{row['content_label']} · {row['video_name']} · {created} · "
+        f"{row['candidates']} candidates · {row['kept']} kept"
+    )
+
+
 def main() -> None:
     st.set_page_config(page_title="HighlightMiner", page_icon="⛏️", layout="wide")
+    db_path = default_db_path()
 
     with st.container(border=True):
         st.title("⛏️ HighlightMiner")
-        st.caption("Mine long VODs for the moments worth keeping — audio + Whisper + optional chat, ranked locally on your machine.")
+        st.caption(
+            "Mine long VODs for the moments worth keeping — audio + Whisper + optional chat, "
+            "ranked locally on your machine. v0.2 stores analysis history in SQLite."
+        )
 
     with st.sidebar:
         st.header("🎬 Source")
-        st.caption("Choose local files directly. HighlightMiner reads them in place; the VOD is not uploaded through the browser.")
+        st.caption("Choose local files directly. The VOD is read in place and is never uploaded through the browser.")
 
         video_path = _path_picker(
             "VOD",
@@ -203,7 +221,7 @@ def main() -> None:
             "Content / Game",
             key="content_label_input",
             placeholder="Just Chatting / Overwatch 2 / ...",
-            help="One primary label for this VOD. It is stored with the analysis and used as the export subfolder.",
+            help="One primary label for this VOD. It is stored with every candidate for future preference learning.",
         )
         work_dir = _path_picker(
             "Work folder",
@@ -233,32 +251,54 @@ def main() -> None:
                     label.write(message)
                     bar.progress(min(1.0, max(0.0, value)))
 
-                analysis_path = analyze_vod(
+                analysis_id = analyze_vod(
                     video_path,
                     work_dir,
                     settings,
                     chat_path or None,
                     progress,
                     content_label=content_label,
+                    db_path=db_path,
                 )
-                st.session_state.analysis_path = str(analysis_path)
-                st.session_state.analysis_path_input = str(analysis_path)
+                st.session_state.analysis_id = analysis_id
                 status.update(label="Analysis complete", state="complete", expanded=False)
+                st.rerun()
             except Exception as exc:
                 st.exception(exc)
 
         st.divider()
-        st.subheader("📂 Existing analysis")
-        default_analysis = st.session_state.get("analysis_path", str(Path(work_dir) / "analysis.json"))
-        analysis_path_text = _path_picker(
-            "analysis.json",
-            "analysis_path_input",
-            default=default_analysis,
-            file_filter=_JSON_FILTER,
-        )
-        if st.button("Load analysis", width="stretch"):
-            st.session_state.analysis_path = analysis_path_text
-            st.rerun()
+        st.subheader("🗃️ Analysis history")
+        history = list_analyses(db_path, limit=50)
+        if history:
+            labels = [_history_label(row) for row in history]
+            ids = [row["id"] for row in history]
+            current_id = st.session_state.get("analysis_id")
+            default_index = ids.index(current_id) if current_id in ids else 0
+            selected = st.selectbox("Recent analyses", labels, index=default_index)
+            selected_id = ids[labels.index(selected)]
+            if st.button("Load selected analysis", width="stretch"):
+                st.session_state.analysis_id = selected_id
+                st.rerun()
+        else:
+            st.caption("No SQLite analyses yet.")
+
+        with st.expander("Import v0.1 analysis.json"):
+            legacy_path = _path_picker(
+                "Legacy analysis.json",
+                "legacy_analysis_input",
+                placeholder=r"D:\HighlightMiner\highlightminer_work\stream\analysis.json",
+                file_filter=_JSON_FILTER,
+            )
+            if st.button("Import into database", disabled=not legacy_path, width="stretch"):
+                try:
+                    imported_id = import_legacy_analysis(legacy_path, db_path)
+                    st.session_state.analysis_id = imported_id
+                    st.success("Legacy analysis imported.")
+                    st.rerun()
+                except Exception as exc:
+                    st.exception(exc)
+
+        st.caption(f"Database: `{db_path}`")
 
         shutdown_file = os.environ.get("HIGHLIGHTMINER_SHUTDOWN_FILE")
         if shutdown_file:
@@ -272,15 +312,20 @@ def main() -> None:
                     st.info("Shutting down HighlightMiner… You can close this browser tab.")
                     st.stop()
 
-    analysis_path = Path(st.session_state.get("analysis_path", analysis_path_text))
-    if not analysis_path.exists():
-        st.info("Choose a local VOD in the sidebar and run **Analyze VOD**, or browse to an existing `analysis.json`.")
+    analysis_id = st.session_state.get("analysis_id")
+    if not analysis_id:
+        st.info("Analyze a VOD, choose an item from **Analysis history**, or import a v0.1 `analysis.json`.")
         return
 
-    analysis = load_json(analysis_path)
+    try:
+        analysis = load_analysis(db_path, analysis_id)
+    except KeyError:
+        st.session_state.pop("analysis_id", None)
+        st.warning("That analysis no longer exists in the database.")
+        return
+
     candidates = analysis.get("candidates", [])
-    review_path = analysis_path.with_name("review.json")
-    review = load_review(review_path, analysis)
+    review = load_review(db_path, analysis_id, analysis)
     content_label = normalize_content_label(analysis.get("content_label"))
 
     st.subheader("📊 Analysis overview")
@@ -290,10 +335,10 @@ def main() -> None:
     c3.metric("Rejected", sum(x.get("status") == "reject" for x in review["items"].values()))
     lang = analysis.get("transcription", {}).get("language") or "?"
     c4.metric("Whisper language", lang)
-    st.caption(f"Content / Game: **{content_label}**")
+    st.caption(f"Content / Game: **{content_label}** · Analysis ID: `{analysis_id[:12]}`")
 
     if not candidates:
-        st.warning("No candidates cleared the current threshold. Lower `min_candidate_score` in settings.json and analyze again.")
+        st.warning("No candidates cleared the current threshold. Adjust settings and analyze again.")
         return
 
     st.subheader("⛏️ Ranked candidates")
@@ -310,21 +355,30 @@ def main() -> None:
     left, right = st.columns(2)
     with left:
         start = st.number_input(
-            "Clip start (seconds)", min_value=0.0, max_value=float(analysis["duration"]),
-            value=float(item["start"]), step=1.0, key=f"start_{cand['id']}"
+            "Clip start (seconds)",
+            min_value=0.0,
+            max_value=float(analysis["duration"]),
+            value=float(item["start"]),
+            step=1.0,
+            key=f"start_{analysis_id}_{cand['id']}",
         )
     with right:
         end = st.number_input(
-            "Clip end (seconds)", min_value=0.1, max_value=float(analysis["duration"]),
-            value=float(item["end"]), step=1.0, key=f"end_{cand['id']}"
+            "Clip end (seconds)",
+            min_value=0.1,
+            max_value=float(analysis["duration"]),
+            value=float(item["end"]),
+            step=1.0,
+            key=f"end_{analysis_id}_{cand['id']}",
         )
 
     preview_end = max(float(end), float(start) + 0.1)
-    preview_dir = analysis_path.parent / ".previews"
+    preview_dir = Path(analysis["work_dir"]) / ".previews" / analysis_id
     try:
+        source_video = validate_local_video(analysis["video_path"])
         with st.spinner("Preparing lightweight preview…"):
             preview_path = create_preview_clip(
-                analysis["video_path"],
+                source_video,
                 preview_dir,
                 cand["id"],
                 float(start),
@@ -336,10 +390,14 @@ def main() -> None:
             "The full source VOD is never sent to the browser player."
         )
     except Exception as exc:
-        st.error("Could not build the lightweight preview clip.")
+        st.error("Could not build the lightweight preview clip. The stored source path may have moved or failed validation.")
         st.exception(exc)
 
-    title = st.text_input("Optional clip title", value=item.get("title", ""), key=f"title_{cand['id']}")
+    title = st.text_input(
+        "Optional clip title",
+        value=item.get("title", ""),
+        key=f"title_{analysis_id}_{cand['id']}",
+    )
 
     st.caption(
         f"Signals — audio {cand['audio_score']:.2f} · transcript {cand['transcript_score']:.2f} · chat {cand['chat_score']:.2f}"
@@ -351,19 +409,19 @@ def main() -> None:
     b1, b2, b3, b4 = st.columns(4)
     if b1.button("✅ Keep", width="stretch"):
         item.update(status="keep", start=start, end=preview_end, title=title)
-        save_review(review_path, review)
+        save_review(db_path, analysis_id, review)
         st.rerun()
     if b2.button("❌ Reject", width="stretch"):
         item.update(status="reject", start=start, end=preview_end, title=title)
-        save_review(review_path, review)
+        save_review(db_path, analysis_id, review)
         st.rerun()
     if b3.button("↩ Unreview", width="stretch"):
         item.update(status="unreviewed", start=start, end=preview_end, title=title)
-        save_review(review_path, review)
+        save_review(db_path, analysis_id, review)
         st.rerun()
     if b4.button("💾 Save timing", width="stretch"):
         item.update(start=start, end=preview_end, title=title)
-        save_review(review_path, review)
+        save_review(db_path, analysis_id, review)
         st.success("Saved")
 
     st.divider()
@@ -371,18 +429,23 @@ def main() -> None:
     export_dir = _path_picker(
         "Export folder",
         "export_dir_input",
-        default=str(analysis_path.parent / "clips"),
+        default=str(Path(analysis["work_dir"]) / "clips"),
         folder=True,
     )
     st.caption(f"Kept clips from this analysis will export under **{content_label}**.")
-    kept = [(c, review["items"][c["id"]]) for c in candidates if review["items"][c["id"]].get("status") == "keep"]
+    kept = [
+        (c, review["items"][c["id"]])
+        for c in candidates
+        if review["items"][c["id"]].get("status") == "keep"
+    ]
     if st.button(f"Export {len(kept)} kept clip(s)", disabled=not kept, type="primary"):
         exported = []
         progress = st.progress(0.0)
+        source_video = validate_local_video(analysis["video_path"])
         for n, (c, r) in enumerate(kept, start=1):
             category = c.get("content_label") or analysis.get("content_label")
             out = export_clip(
-                analysis["video_path"],
+                source_video,
                 export_dir,
                 c["id"],
                 r["start"],
@@ -390,6 +453,7 @@ def main() -> None:
                 r.get("title") or None,
                 category=category,
             )
+            record_export(db_path, analysis_id, c["id"], out)
             exported.append(str(out))
             progress.progress(n / len(kept))
         destination = Path(exported[0]).parent.resolve()
