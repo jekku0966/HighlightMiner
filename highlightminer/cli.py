@@ -164,7 +164,13 @@ def cmd_ui(args: argparse.Namespace | None = None) -> int:
         "--server.port=8501",
         "--browser.gatherUsageStats=false",
     ]
-    process = subprocess.Popen(command, env=env, creationflags=creationflags, cwd=str(app_root()))
+    process = subprocess.Popen(
+        command,
+        env=env,
+        creationflags=creationflags,
+        cwd=str(app_root()),
+        shell=False,
+    )
 
     shutdown_requested = False
     desktop_closed_normally = False
