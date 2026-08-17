@@ -74,6 +74,18 @@ foreach ($name in @("settings.json", "README.md", "CUDA_SETUP.md", "ATTRIBUTIONS
     }
 }
 
+# Keep Streamlit's supported theme configuration beside the packaged app so
+# source mode and the portable EXE use the same HighlightMiner appearance.
+$streamlitConfigSource = Join-Path $repoRoot ".streamlit"
+$streamlitConfigDestination = Join-Path $distRoot ".streamlit"
+if (Test-Path $streamlitConfigSource) {
+    if (Test-Path $streamlitConfigDestination) {
+        Remove-Item $streamlitConfigDestination -Recurse -Force
+    }
+    Copy-Item $streamlitConfigSource $streamlitConfigDestination -Recurse -Force
+    Write-Host "Copied Streamlit theme configuration."
+}
+
 # Copy FFmpeg/ffprobe from the same portable locations supported by the app.
 $ffmpegCopied = $true
 foreach ($name in @("ffmpeg.exe", "ffprobe.exe")) {
