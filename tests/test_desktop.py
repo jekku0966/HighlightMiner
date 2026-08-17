@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import sys
+import threading
+import types
+
 import pytest
 
+import highlightminer.desktop as desktop
 from highlightminer.desktop import resolve_ui_mode, wait_for_server
 
 
@@ -39,3 +44,61 @@ def test_wait_for_server_fails_fast_if_child_exits() -> None:
 
     with pytest.raises(RuntimeError, match="exit code 7"):
         wait_for_server(DeadProcess(), timeout=1.0)
+
+
+def test_desktop_close_stops_backend_before_destroy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    order: list[str] = []
+    destroyed = threading.Event()
+    closing_handlers = []
+
+    class Event:
+        def __iadd__(self, handler):
+            closing_handlers.append(handler)
+            return self
+
+    class Events:
+        def __init__(self) -> None:
+            self.closing = Event()
+
+    class Window:
+        def __init__(self) -> None:
+            self.events = Events()
+
+        def destroy(self) -> None:
+            order.append("destroy")
+            destroyed.set()
+
+    window = Window()
+    fake_webview = types.ModuleType("webview")
+    fake_webview.settings = {}
+    fake_webview.create_window = lambda *_args, **_kwargs: window
+
+    def start(**_kwargs) -> None:
+        assert len(closing_handlers) == 1
+        assert closing_handlers[0]() is False
+        assert destroyed.wait(2.0)
+
+    fake_webview.start = start
+    monkeypatch.setitem(sys.modules, "webview", fake_webview)
+    monkeypatch.setattr(desktop.os, "name", "nt")
+
+    class Process:
+        return_code: int | None = None
+
+        def poll(self) -> int | None:
+            return self.return_code
+
+    process = Process()
+
+    def stop_backend() -> None:
+        order.append("stop")
+        process.return_code = 0
+
+    shutdown_file = tmp_path / "shutdown.flag"
+    desktop.run_desktop_shell(process, shutdown_file, stop_backend=stop_backend)
+
+    assert shutdown_file.exists()
+    assert order == ["stop", "destroy"]
