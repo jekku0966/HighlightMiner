@@ -7,6 +7,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from highlightminer.categorization import normalize_content_label
 from highlightminer.config import Settings
 from highlightminer.export import create_preview_clip, export_clip
 from highlightminer.pipeline import analyze_vod
@@ -198,6 +199,12 @@ def main() -> None:
             placeholder="TwitchDownloader JSON / JSONL / CSV",
             file_filter=_CHAT_FILTER,
         )
+        content_label = st.text_input(
+            "Content / Game",
+            key="content_label_input",
+            placeholder="Just Chatting / Overwatch 2 / ...",
+            help="One primary label for this VOD. It is stored with the analysis and used as the export subfolder.",
+        )
         work_dir = _path_picker(
             "Work folder",
             "work_dir_input",
@@ -226,7 +233,14 @@ def main() -> None:
                     label.write(message)
                     bar.progress(min(1.0, max(0.0, value)))
 
-                analysis_path = analyze_vod(video_path, work_dir, settings, chat_path or None, progress)
+                analysis_path = analyze_vod(
+                    video_path,
+                    work_dir,
+                    settings,
+                    chat_path or None,
+                    progress,
+                    content_label=content_label,
+                )
                 st.session_state.analysis_path = str(analysis_path)
                 st.session_state.analysis_path_input = str(analysis_path)
                 status.update(label="Analysis complete", state="complete", expanded=False)
@@ -267,6 +281,7 @@ def main() -> None:
     candidates = analysis.get("candidates", [])
     review_path = analysis_path.with_name("review.json")
     review = load_review(review_path, analysis)
+    content_label = normalize_content_label(analysis.get("content_label"))
 
     st.subheader("📊 Analysis overview")
     c1, c2, c3, c4 = st.columns(4)
@@ -275,6 +290,7 @@ def main() -> None:
     c3.metric("Rejected", sum(x.get("status") == "reject" for x in review["items"].values()))
     lang = analysis.get("transcription", {}).get("language") or "?"
     c4.metric("Whisper language", lang)
+    st.caption(f"Content / Game: **{content_label}**")
 
     if not candidates:
         st.warning("No candidates cleared the current threshold. Lower `min_candidate_score` in settings.json and analyze again.")
@@ -358,17 +374,26 @@ def main() -> None:
         default=str(analysis_path.parent / "clips"),
         folder=True,
     )
+    st.caption(f"Kept clips from this analysis will export under **{content_label}**.")
     kept = [(c, review["items"][c["id"]]) for c in candidates if review["items"][c["id"]].get("status") == "keep"]
     if st.button(f"Export {len(kept)} kept clip(s)", disabled=not kept, type="primary"):
         exported = []
         progress = st.progress(0.0)
         for n, (c, r) in enumerate(kept, start=1):
+            category = c.get("content_label") or analysis.get("content_label")
             out = export_clip(
-                analysis["video_path"], export_dir, c["id"], r["start"], r["end"], r.get("title") or None
+                analysis["video_path"],
+                export_dir,
+                c["id"],
+                r["start"],
+                r["end"],
+                r.get("title") or None,
+                category=category,
             )
             exported.append(str(out))
             progress.progress(n / len(kept))
-        st.success(f"Exported {len(exported)} clip(s) to {Path(export_dir).resolve()}")
+        destination = Path(exported[0]).parent.resolve()
+        st.success(f"Exported {len(exported)} clip(s) to {destination}")
         st.code("\n".join(exported))
 
 
