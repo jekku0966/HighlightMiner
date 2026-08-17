@@ -89,7 +89,7 @@ def _run_h264_encode(
                 ]
                 audio_bitrate = "192k"
 
-            subprocess.run(finish(video_args, audio_bitrate), check=True)
+            subprocess.run(finish(video_args, audio_bitrate), check=True, shell=False)
             return
         except subprocess.CalledProcessError:
             # FFmpeg can advertise NVENC even when no usable NVIDIA device/driver exists.
@@ -116,7 +116,7 @@ def _run_h264_encode(
         ]
         audio_bitrate = "192k"
 
-    subprocess.run(finish(video_args, audio_bitrate), check=True)
+    subprocess.run(finish(video_args, audio_bitrate), check=True, shell=False)
 
 
 def create_preview_clip(
