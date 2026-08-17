@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable
 
 from .audio import analyze_audio
+from .categorization import normalize_content_label
 from .chat import analyze_chat, load_chat
 from .config import Settings
 from .media import extract_analysis_audio, probe_media
@@ -24,12 +25,14 @@ def analyze_vod(
     settings: Settings,
     chat_path: str | Path | None = None,
     progress: Progress | None = None,
+    content_label: str | None = None,
 ) -> Path:
     progress = progress or _noop
     video = Path(video_path).expanduser().resolve()
     if not video.exists():
         raise FileNotFoundError(video)
     work = ensure_dir(work_dir)
+    normalized_content_label = normalize_content_label(content_label)
 
     progress("Probing media", 0.03)
     media = probe_media(video)
@@ -67,10 +70,13 @@ def analyze_vod(
 
     progress("Ranking candidate moments", 0.86)
     candidates = find_candidates(duration, audio_features, transcript, chat_features, settings)
+    for candidate in candidates:
+        candidate["content_label"] = normalized_content_label
 
     analysis = {
         "version": 1,
         "video_path": str(video),
+        "content_label": normalized_content_label,
         "duration": duration,
         "media": media,
         "transcription": transcript_meta,
