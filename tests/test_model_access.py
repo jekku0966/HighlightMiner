@@ -7,9 +7,11 @@ import pytest
 from highlightminer.config import Settings
 from highlightminer.model_access import (
     ModelAccessPreferences,
+    ModelDecisionRequired,
     load_model_access,
     model_signature_payload,
     prepare_model_reference,
+    resolve_model_reference,
     save_model_access,
     validate_local_model_directory,
 )
@@ -72,7 +74,7 @@ def test_local_model_is_forced_offline_and_part_of_cache_signature(tmp_path: Pat
     assert signature["files"]["model.bin"]["size"] == 4
 
 
-def test_uncached_model_is_blocked_without_explicit_consent() -> None:
+def test_uncached_model_requires_a_decision_when_policy_is_unset() -> None:
     settings = Settings(whisper_model="large-v3")
     calls: list[tuple[str, bool]] = []
 
@@ -80,23 +82,69 @@ def test_uncached_model_is_blocked_without_explicit_consent() -> None:
         calls.append((model, local_files_only))
         raise FileNotFoundError("not cached")
 
-    with pytest.raises(RuntimeError, match="explicitly allow model downloads"):
-        prepare_model_reference(
+    with pytest.raises(ModelDecisionRequired, match="continue this analysis without speech recognition"):
+        resolve_model_reference(
             settings,
-            ModelAccessPreferences("deny", None),
+            ModelAccessPreferences("unset", None),
             download_model_fn=fake_download,
         )
 
     assert calls == [("large-v3", True)]
 
 
-def test_allowed_model_can_use_managed_download_path() -> None:
-    prepared = prepare_model_reference(
+def test_denied_uncached_model_resolves_to_no_transcription() -> None:
+    prepared = resolve_model_reference(
         Settings(whisper_model="large-v3"),
-        ModelAccessPreferences("allow", None),
-        download_model_fn=lambda *args, **kwargs: pytest.fail("cache lookup should not run"),
+        ModelAccessPreferences("deny", None),
+        download_model_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
     )
 
+    assert prepared is None
+
+
+def test_cached_model_is_used_offline_even_without_download_consent(tmp_path: Path) -> None:
+    cached = _make_local_model(tmp_path)
+    prepared = resolve_model_reference(
+        Settings(whisper_model="large-v3"),
+        ModelAccessPreferences("unset", None),
+        download_model_fn=lambda *_args, **_kwargs: str(cached),
+    )
+
+    assert prepared is not None
+    assert prepared.reference == str(cached)
+    assert prepared.local_files_only is True
+    assert prepared.source == "cache"
+
+
+def test_allowed_model_can_use_managed_download_path() -> None:
+    prepared = resolve_model_reference(
+        Settings(whisper_model="large-v3"),
+        ModelAccessPreferences("allow", None),
+        download_model_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+    )
+
+    assert prepared is not None
     assert prepared.reference == "large-v3"
     assert prepared.local_files_only is False
     assert prepared.source == "managed"
+
+
+def test_strict_prepare_still_blocks_denied_uncached_model() -> None:
+    with pytest.raises(RuntimeError, match="model downloading is disabled"):
+        prepare_model_reference(
+            Settings(whisper_model="large-v3"),
+            ModelAccessPreferences("deny", None),
+            download_model_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
+        )
+
+
+def test_cache_probe_does_not_hide_unexpected_errors() -> None:
+    def unreadable_cache(*_args, **_kwargs) -> str:
+        raise PermissionError("cache unreadable")
+
+    with pytest.raises(PermissionError, match="cache unreadable"):
+        resolve_model_reference(
+            Settings(whisper_model="large-v3"),
+            ModelAccessPreferences("unset", None),
+            download_model_fn=unreadable_cache,
+        )

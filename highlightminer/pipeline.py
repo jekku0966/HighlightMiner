@@ -12,7 +12,13 @@ from .identity import describe_source, full_file_sha256, stable_signature
 from .learning import rerank_candidates
 from .learning_store import prepare_preference_model
 from .media import extract_analysis_audio, probe_media
-from .model_access import ModelAccessPreferences, load_model_access, model_signature_payload
+from .model_access import (
+    ModelAccessPreferences,
+    PreparedModelReference,
+    load_model_access,
+    model_signature_payload,
+    resolve_model_reference,
+)
 from .scoring import find_candidates
 from .security import validate_chat_file, validate_local_video
 from .settings_presets import detect_weight_preset
@@ -24,6 +30,13 @@ from .storage import (
     save_analysis,
 )
 from .transcribe import score_text, transcribe_audio
+from .transcription_status import (
+    SKIP_REASON_MODEL_DOWNLOADS_DISABLED,
+    SKIP_REASON_USER_REQUESTED,
+    TRANSCRIPTION_AVAILABLE,
+    is_transcription_skipped,
+    skipped_transcription_metadata,
+)
 from .util import ensure_dir
 
 Progress = Callable[[str, float], None]
@@ -46,8 +59,6 @@ def _stage_signatures(
             "analysis_audio": "pcm_s16le-16khz-mono",
         },
     )
-    # Reaction phrase scoring is deliberately excluded: cached transcript text
-    # can be cheaply rescored without re-running Whisper.
     transcript = stable_signature(
         "highlightminer-whisper-transcript-v1",
         {
@@ -92,16 +103,15 @@ def analyze_vod(
     *,
     source_info: dict | None = None,
     reuse_features: bool = True,
+    allow_model_download: bool = False,
+    skip_transcription: bool = False,
 ) -> str:
     """Analyze a VOD and persist a new analysis run in SQLite.
 
-    The same physical VOD may have many analysis runs. Compatible transcript,
-    audio, and chat feature stages are reused from prior runs by default; the
-    candidate ranking and review state are always new for each run.
-
-    Preference learning is a conservative reranker layered on top of the
-    heuristic candidate generator. Any learner failure falls back to the base
-    ranking rather than blocking analysis.
+    Compatible feature stages are reused from prior runs. A fresh Whisper pass
+    is resolved only when actually needed. If model downloads were explicitly
+    denied and no local/cached model exists, mining continues with audio plus
+    optional chat. Preference learning remains a conservative fail-open reranker.
     """
     progress = progress or _noop
     video = validate_local_video(video_path)
@@ -143,6 +153,35 @@ def analyze_vod(
 
     need_audio = audio_features is None
     need_transcript = transcript is None
+    prepared_model: PreparedModelReference | None = None
+
+    if skip_transcription:
+        transcript = []
+        transcript_meta = skipped_transcription_metadata(
+            settings.whisper_model,
+            SKIP_REASON_USER_REQUESTED,
+        )
+        cache_from.pop("transcript", None)
+        need_transcript = False
+    elif need_transcript:
+        # Resolver semantics are intentional: None means the user explicitly
+        # denied downloads; an undecided policy raises ModelDecisionRequired so
+        # an interactive caller can ask before any network access is permitted.
+        prepared_model = resolve_model_reference(
+            settings,
+            model_access,
+            allow_download_override=allow_model_download,
+        )
+        if prepared_model is None:
+            transcript = []
+            transcript_meta = skipped_transcription_metadata(
+                settings.whisper_model,
+                SKIP_REASON_MODEL_DOWNLOADS_DISABLED,
+            )
+            need_transcript = False
+
+    transcription_skipped = is_transcription_skipped(transcript_meta)
+    skip_reason = str((transcript_meta or {}).get("reason") or "") if transcription_skipped else None
     need_wav = need_audio or need_transcript
     wav: Path | None = None
 
@@ -158,6 +197,8 @@ def analyze_vod(
             temp_handle.close()
             progress("Extracting 16 kHz analysis audio", 0.10)
             extract_analysis_audio(video, wav)
+        elif transcription_skipped:
+            progress("Speech recognition disabled; using available signals", 0.16)
         else:
             progress("Reusing cached analysis audio features + transcript", 0.16)
 
@@ -171,13 +212,23 @@ def analyze_vod(
         if need_transcript:
             progress("Transcribing with faster-whisper", 0.32)
             assert wav is not None
-            transcript, transcript_meta = transcribe_audio(wav, settings, model_access=model_access)
+            assert prepared_model is not None
+            transcript, transcript_meta = transcribe_audio(
+                wav,
+                settings,
+                model_access=model_access,
+                prepared_model=prepared_model,
+            )
+        elif transcription_skipped:
+            progress("Skipping speech recognition", 0.60)
         else:
             progress("Reusing cached Whisper transcript", 0.60)
 
         transcript = _rescore_transcript(list(transcript or []), settings)
         transcript_meta = dict(transcript_meta or {})
-        transcript_meta["reaction_scoring"] = "current-settings"
+        if not transcription_skipped:
+            transcript_meta.setdefault("status", TRANSCRIPTION_AVAILABLE)
+            transcript_meta["reaction_scoring"] = "current-settings"
 
         if chat_path:
             validated_chat = validate_chat_file(chat_path)
@@ -185,10 +236,7 @@ def analyze_vod(
                 progress("Parsing chat", 0.76)
                 records = load_chat(validated_chat)
                 chat_features = analyze_chat(records, duration)
-                chat_info = {
-                    "path": str(validated_chat),
-                    "messages": len(records),
-                }
+                chat_info = {"path": str(validated_chat), "messages": len(records)}
             else:
                 progress("Reusing cached chat features", 0.78)
                 chat_info = dict(chat_info or {})
@@ -204,6 +252,7 @@ def analyze_vod(
             transcript,
             list(chat_features or []),
             settings,
+            transcript_available=not transcription_skipped,
         )
         for candidate in candidates:
             candidate["content_label"] = normalized_content_label
@@ -211,6 +260,7 @@ def analyze_vod(
             features["context"] = {
                 "content_label": normalized_content_label,
                 "mining_profile": mining_profile,
+                "has_transcript": not transcription_skipped,
             }
             candidate["features"] = features
 
@@ -239,7 +289,6 @@ def analyze_vod(
                 }
             )
         except Exception as exc:
-            # Learning must never take the known-good heuristic detector down.
             learning_info = {
                 "active": False,
                 "state": "error",
@@ -254,6 +303,8 @@ def analyze_vod(
             "reuse_enabled": bool(reuse_features),
             "mining_profile": mining_profile,
             "learning": learning_info,
+            "transcription_skipped": transcription_skipped,
+            "transcription_skip_reason": skip_reason,
         }
         analysis = {
             "version": 2,
@@ -269,6 +320,9 @@ def analyze_vod(
             "candidates": candidates,
         }
         progress("Saving analysis database", 0.96)
+        save_signatures: dict[str, str | None] = dict(signatures)
+        if transcription_skipped:
+            save_signatures["transcript"] = None
         analysis_id = save_analysis(
             db_path,
             analysis,
@@ -277,11 +331,13 @@ def analyze_vod(
             list(chat_features or []),
             work_dir=work,
             source=source,
-            signatures=signatures,
+            signatures=save_signatures,
             cache_info=cache_info,
         )
         reused = ", ".join(sorted(cache_from))
         suffix = f" · reused {reused}" if reused else ""
+        if transcription_skipped:
+            suffix += " · no transcript"
         learning_suffix = " · personalized" if learning_info.get("active") else ""
         progress(f"Done — {len(candidates)} candidates{suffix}{learning_suffix}", 1.0)
         return analysis_id

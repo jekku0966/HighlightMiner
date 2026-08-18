@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -11,6 +12,10 @@ from .storage import connect, utc_now
 
 _DOWNLOAD_CONSENTS = {"unset", "allow", "deny"}
 _REQUIRED_LOCAL_MODEL_FILES = ("config.json", "model.bin", "tokenizer.json")
+
+
+class ModelDecisionRequired(RuntimeError):
+    """A missing recognition model needs an explicit interactive decision."""
 
 
 @dataclass(frozen=True)
@@ -47,10 +52,30 @@ def models_root() -> Path:
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError:
-        # A read-only portable location should not stop the app from starting;
-        # users can still browse to a local model folder elsewhere.
         pass
     return path
+
+
+def huggingface_cache_directory() -> Path:
+    explicit_hub = os.environ.get("HF_HUB_CACHE", "").strip()
+    if explicit_hub:
+        return Path(explicit_hub).expanduser()
+    explicit_home = os.environ.get("HF_HOME", "").strip()
+    if explicit_home:
+        return Path(explicit_home).expanduser() / "hub"
+    xdg_cache = os.environ.get("XDG_CACHE_HOME", "").strip()
+    if xdg_cache:
+        return Path(xdg_cache).expanduser() / "huggingface" / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _local_entry_not_found_error() -> type[Exception]:
+    """Resolve Hugging Face's offline cache-miss type across supported versions."""
+    try:
+        from huggingface_hub.errors import LocalEntryNotFoundError
+    except ImportError:  # Older huggingface_hub exposed it from utils.
+        from huggingface_hub.utils import LocalEntryNotFoundError
+    return LocalEntryNotFoundError
 
 
 def _normalize_local_model_path(path: str | Path | None) -> str | None:
@@ -118,10 +143,7 @@ def set_model_download_consent(
     db_path: str | Path | None = None,
 ) -> ModelAccessPreferences:
     current = load_model_access(db_path)
-    return save_model_access(
-        ModelAccessPreferences(consent, current.local_model_path),
-        db_path,
-    )
+    return save_model_access(ModelAccessPreferences(consent, current.local_model_path), db_path)
 
 
 def validate_local_model_directory(path: str | Path) -> Path:
@@ -133,19 +155,12 @@ def validate_local_model_directory(path: str | Path) -> Path:
         raise ValueError(f"Expected a local Whisper model folder: {resolved}")
     missing = [name for name in _REQUIRED_LOCAL_MODEL_FILES if not (resolved / name).is_file()]
     if missing:
-        raise ValueError(
-            "Local Whisper model folder is incomplete. Missing: " + ", ".join(missing)
-        )
+        raise ValueError("Local Whisper model folder is incomplete. Missing: " + ", ".join(missing))
     return resolved
 
 
-def model_signature_payload(
-    settings: Settings,
-    preferences: ModelAccessPreferences,
-) -> str | dict:
+def model_signature_payload(settings: Settings, preferences: ModelAccessPreferences) -> str | dict:
     if not preferences.local_model_path:
-        # Preserve the pre-consent v0.2 cache key for normal managed models so
-        # this feature does not force a one-time retranscription of old runs.
         return settings.whisper_model
 
     normalized = _normalize_local_model_path(preferences.local_model_path)
@@ -159,11 +174,43 @@ def model_signature_payload(
             files[name] = {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
         except OSError:
             files[name] = None
-    return {
-        "source": "local",
-        "path": normalized,
-        "files": files,
-    }
+    return {"source": "local", "path": normalized, "files": files}
+
+
+def resolve_model_reference(
+    settings: Settings,
+    preferences: ModelAccessPreferences,
+    *,
+    allow_download_override: bool = False,
+    download_model_fn: Callable[..., str] | None = None,
+) -> PreparedModelReference | None:
+    """Resolve local/cache/download access without surprising networking."""
+    if preferences.local_model_path:
+        local = validate_local_model_directory(preferences.local_model_path)
+        return PreparedModelReference(str(local), True, "local", local.name)
+
+    if download_model_fn is None:
+        from faster_whisper.utils import download_model
+        download_model_fn = download_model
+
+    cache_miss_types = (_local_entry_not_found_error(), FileNotFoundError)
+    try:
+        cached_path = download_model_fn(settings.whisper_model, local_files_only=True)
+    except cache_miss_types:
+        cached_path = None
+    if cached_path:
+        return PreparedModelReference(str(cached_path), True, "cache", settings.whisper_model)
+
+    if allow_download_override or preferences.download_consent == "allow":
+        return PreparedModelReference(settings.whisper_model, False, "managed", settings.whisper_model)
+    if preferences.download_consent == "deny":
+        return None
+
+    raise ModelDecisionRequired(
+        f"The speech-recognition model {settings.whisper_model!r} is not installed. "
+        "Choose whether to download it, select a local CTranslate2 Whisper model folder, "
+        "or continue this analysis without speech recognition."
+    )
 
 
 def prepare_model_reference(
@@ -172,40 +219,15 @@ def prepare_model_reference(
     *,
     download_model_fn: Callable[..., str] | None = None,
 ) -> PreparedModelReference:
-    if preferences.local_model_path:
-        local = validate_local_model_directory(preferences.local_model_path)
-        return PreparedModelReference(
-            reference=str(local),
-            local_files_only=True,
-            source="local",
-            display_name=local.name,
-        )
-
-    if preferences.download_consent == "allow":
-        return PreparedModelReference(
-            reference=settings.whisper_model,
-            local_files_only=False,
-            source="managed",
-            display_name=settings.whisper_model,
-        )
-
-    if download_model_fn is None:
-        from faster_whisper.utils import download_model
-
-        download_model_fn = download_model
-
     try:
-        cached_path = download_model_fn(settings.whisper_model, local_files_only=True)
-    except Exception as exc:
-        state = "has not been allowed yet" if preferences.download_consent == "unset" else "is disabled"
+        prepared = resolve_model_reference(settings, preferences, download_model_fn=download_model_fn)
+    except ModelDecisionRequired as exc:
         raise RuntimeError(
-            f"The speech-recognition model {settings.whisper_model!r} is not available locally and model downloading {state}. "
-            "Open Settings → Analysis engine to explicitly allow model downloads or choose a local CTranslate2 Whisper model folder."
+            f"{exc} Open Settings → Analysis engine to explicitly allow model downloads or choose a local model."
         ) from exc
-
-    return PreparedModelReference(
-        reference=str(cached_path),
-        local_files_only=True,
-        source="cache",
-        display_name=settings.whisper_model,
-    )
+    if prepared is None:
+        raise RuntimeError(
+            f"The speech-recognition model {settings.whisper_model!r} is not available locally and model downloading is disabled. "
+            "Open Settings → Analysis engine to allow downloads or choose a local CTranslate2 Whisper model folder."
+        )
+    return prepared

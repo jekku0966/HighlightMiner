@@ -11,8 +11,9 @@ This document describes the experimental learner on the `v0.2-learning` branch. 
 - `candidates.score` remains the immutable base heuristic score.
 - Learning only reranks candidates found by the heuristic detector.
 - If learner training/prediction fails, HighlightMiner keeps the base ranking and continues the analysis.
+- Speech recognition is optional; the learner records whether the transcript signal actually existed for each candidate.
 
-The first model is a deterministic NumPy logistic regression with standardization and L2 regularization. It adds no scikit-learn, LLM, cloud, GPU-training, or Whisper fine-tuning dependency.
+The current model is a deterministic NumPy logistic regression with standardization and L2 regularization. It adds no scikit-learn, LLM, cloud, GPU-training, or Whisper fine-tuning dependency.
 
 ## Activation gates
 
@@ -29,7 +30,7 @@ Learning influence starts at **10%**, grows with more labels, and is capped at *
 
 ## Learner features
 
-The v2 context model uses information that already exists when the candidate is generated:
+The current `preference-logreg-v3-signal-availability` model uses information that already exists when the candidate is generated:
 
 1. immutable base heuristic score;
 2. audio score;
@@ -39,13 +40,29 @@ The v2 context model uses information that already exists when the candidate is 
 6. peak combined signal;
 7. top-five combined mean;
 8. active-signal fraction;
-9. whether chat exists;
-10. seed-point count;
-11. effective normalized audio weight;
-12. effective normalized transcript weight;
-13. effective normalized chat weight.
+9. whether a transcript signal was available;
+10. whether chat exists;
+11. seed-point count;
+12. effective normalized audio weight;
+13. effective normalized transcript weight;
+14. effective normalized chat weight.
+
+The active-signal fraction is divided by the number of signals that actually existed for that candidate. A no-transcript run is therefore not penalized as though an inactive transcript signal had been present.
+
+Older learning examples that predate explicit signal-availability tracking default to transcript-available because those builds always attempted Whisper when creating a fresh candidate set. The model-version bump prevents an older persisted 13-feature learner from being used as though it were compatible with this 14-feature schema.
 
 Previous learner probabilities/final scores, review state, exports, clip titles, and other post-decision data are excluded from the feature vector to prevent target leakage.
+
+## Optional speech recognition
+
+When a user declines recognition-model downloads and no cached/local model is available, HighlightMiner can still create candidates using audio plus optional chat. The unavailable transcript gets zero effective weight and the remaining signals are renormalized before scoring.
+
+Candidate snapshots record `has_transcript` plus the effective post-renormalization weights. This lets learning distinguish:
+
+- `transcript_score = 0` because Whisper ran but found no reaction evidence; from
+- `transcript_score = 0` because speech recognition was not part of that analysis at all.
+
+A deliberately skipped transcript is not saved under the normal reusable Whisper cache signature, so a later transcript-enabled rerun can still reuse an older compatible valid transcript.
 
 ## Category / game context
 
@@ -71,7 +88,9 @@ Every new analysis records the human-friendly mining profile used for that run:
 - Audio-heavy
 - Custom
 
-The profile name is provenance and diagnostics. The model uses the **actual normalized numeric signal weights** as inputs because they describe what the detector really did. Two profiles that resolve to the same weights therefore look the same to the numeric model even if one is named `Custom`.
+The profile name is provenance and diagnostics. The model uses the **actual normalized numeric signal weights** as inputs because they describe what the detector really did. When a signal is unavailable, the candidate stores the effective renormalized weights used for that run rather than pretending the original configured ratio was still active.
+
+Two profiles that resolve to the same effective weights therefore look the same to the numeric model even if one is named `Custom`.
 
 The profile name is still retained in the training fingerprint/model statistics so the UI can later answer questions such as:
 
@@ -96,6 +115,8 @@ model id/version
 content/category
 category-adjustment strength/label count
 mining profile
+transcript/chat availability
+effective signal weights
 ```
 
 The base score is never overwritten. New analysis runs can therefore be audited later: heuristic vs personal learner vs final blended ranking.
@@ -104,7 +125,7 @@ The base score is never overwritten. New analysis runs can therefore be audited 
 
 Models are stored in SQLite in `preference_models`. Training is lazy: before a new analysis run, HighlightMiner fingerprints the current labeled dataset and reuses an existing identical model when possible. A new model is trained only when the relevant labeled dataset/context changes.
 
-New analyses store the mining profile in analysis cache metadata and candidate context. Older v0.2 analyses can reconstruct the profile from their exact saved settings snapshot, so they remain useful learning data without a destructive migration.
+New analyses store the mining profile and transcript availability in candidate context. Older v0.2 analyses can reconstruct the profile from their exact saved settings snapshot and are treated as transcript-available for feature compatibility, so they remain useful learning data without a destructive migration.
 
 ## Current non-goals
 

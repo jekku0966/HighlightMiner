@@ -43,6 +43,7 @@ def _example(
             "peak_combined": 0.40 + 0.45 * strong,
             "top5_combined_mean": 0.35 + 0.42 * strong,
             "active_signal_count": 1 + 2 * label,
+            "has_transcript": True,
             "has_chat": True,
             "seed_points": 3 + 8 * label,
             "weight_audio": weights[0],
@@ -95,6 +96,21 @@ def test_feature_vector_ignores_previous_learning_output_and_keeps_mining_weight
     assert first.tolist() == second.tolist()
 
 
+def test_feature_vector_distinguishes_unavailable_transcript_from_zero_score() -> None:
+    available = _example(1, 0, "s")
+    available["transcript_score"] = 0.0
+    available["features"]["max_transcript"] = 0.0
+    unavailable = _example(1, 0, "s")
+    unavailable["transcript_score"] = 0.0
+    unavailable["features"]["max_transcript"] = 0.0
+    unavailable["features"]["has_transcript"] = False
+    unavailable["features"]["weight_audio"] = 0.586207
+    unavailable["features"]["weight_transcript"] = 0.0
+    unavailable["features"]["weight_chat"] = 0.413793
+
+    assert feature_vector(available).tolist() != feature_vector(unavailable).tolist()
+
+
 def test_reranking_preserves_base_score_and_records_context() -> None:
     model = train_preference_model(_training_examples()).model
     assert model is not None
@@ -111,11 +127,13 @@ def test_reranking_preserves_base_score_and_records_context() -> None:
                 "peak_combined": 0.45,
                 "top5_combined_mean": 0.40,
                 "active_signal_count": 1,
+                "has_transcript": True,
                 "has_chat": True,
                 "seed_points": 3,
                 "weight_audio": 0.2,
                 "weight_transcript": 0.6,
                 "weight_chat": 0.2,
+                "context": {"has_transcript": True},
             },
         },
         {
@@ -130,11 +148,13 @@ def test_reranking_preserves_base_score_and_records_context() -> None:
                 "peak_combined": 0.86,
                 "top5_combined_mean": 0.82,
                 "active_signal_count": 3,
+                "has_transcript": True,
                 "has_chat": True,
                 "seed_points": 12,
                 "weight_audio": 0.2,
                 "weight_transcript": 0.6,
                 "weight_chat": 0.2,
+                "context": {"has_transcript": True},
             },
         },
     ]
@@ -151,6 +171,7 @@ def test_reranking_preserves_base_score_and_records_context() -> None:
     assert ranked[0]["features"]["learning"]["base_score"] in {0.70, 0.66}
     assert ranked[0]["features"]["learning"]["mining_profile"] == "Reaction-heavy"
     assert ranked[0]["features"]["context"]["content_label"] == "Overwatch 2"
+    assert ranked[0]["features"]["context"]["has_transcript"] is True
     assert ranked[0]["id"] == "H001"
     assert ranked[1]["id"] == "H002"
 
