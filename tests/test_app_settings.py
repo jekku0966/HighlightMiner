@@ -25,6 +25,29 @@ def test_weight_presets_normalize_and_detect() -> None:
     assert abs(no_chat["audio"] + no_chat["transcript"] - 1.0) < 1e-9
 
 
+def test_fresh_database_persists_product_defaults(tmp_path: Path) -> None:
+    db = tmp_path / "highlightminer.db"
+
+    loaded = load_app_settings(db)
+
+    assert loaded.whisper_model == "large-v3"
+    assert loaded.beam_size == 5
+    assert loaded.vad_filter is True
+    assert loaded.max_candidates == 40
+    assert loaded.weights == {"audio": 0.34, "transcript": 0.42, "chat": 0.24}
+
+    with connect(db) as conn:
+        row = conn.execute(
+            "SELECT settings_json, preset_name FROM app_settings WHERE id = 1"
+        ).fetchone()
+    assert row is not None
+    payload = json.loads(row["settings_json"])
+    assert payload["whisper_model"] == "large-v3"
+    assert payload["beam_size"] == 5
+    assert payload["max_candidates"] == 40
+    assert row["preset_name"] == "Balanced"
+
+
 def test_app_settings_roundtrip_import_export(tmp_path: Path) -> None:
     db = tmp_path / "highlightminer.db"
     custom = Settings(
