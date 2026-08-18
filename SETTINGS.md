@@ -13,6 +13,10 @@ Open **⚙️ Settings** from the HighlightMiner sidebar. The page is split into
 
 Press **Save settings** to make the normal editor state active. Saved changes apply to future analysis runs and reruns. Existing analyses retain the exact settings snapshot they were created with.
 
+VOD, chat, Content / Game, and work-folder selections on the Mine page are kept when you visit Settings and return. Settings widgets are rehydrated from the saved SQLite profile if Streamlit recreated them, so navigating between pages does not replace saved values with widget defaults.
+
+While a VOD analysis is actively processing, the Settings navigation is locked. HighlightMiner queues the analysis first, rerenders the UI with Settings disabled, and only then starts the long-running work. Settings unlocks after completion, an error, or when the analysis pauses for an explicit model decision.
+
 ## Recognition-model downloads and local models
 
 HighlightMiner does not silently opt a user into recognition-model downloads. A fresh database starts at **Ask before any download**, but this does not interrupt application startup.
@@ -33,7 +37,9 @@ If **Never download models** was already saved, a missing model does not stop Hi
 
 A reusable transcript from an earlier compatible run is used before any model decision is needed. In other words, a rerun that can reuse Whisper text does not prompt merely because the model itself is currently absent.
 
-HighlightMiner automatically creates a local `models` directory beside the application/source root. A user can place a manually obtained CTranslate2 Whisper model there or anywhere else on a local drive, then choose the actual model folder with **Local Whisper model folder**. A local model folder must contain at least:
+HighlightMiner automatically creates a local `models` directory beside the application/source root. This directory is only a convenient place for **manually obtained models**, so it is completely normal for it to be empty. Models downloaded by faster-whisper/Hugging Face are stored in the Hugging Face Hub cache instead; the Settings page displays the resolved cache location separately.
+
+A user can place a manually obtained CTranslate2 Whisper model under `models` or anywhere else on a local drive, then choose the actual model folder with **Local Whisper model folder**. A local model folder must contain at least:
 
 ```text
 config.json
@@ -42,6 +48,8 @@ tokenizer.json
 ```
 
 The selected local model overrides the Hugging Face model name and is loaded with local-files-only behavior. Cached managed models are also resolved with local-files-only behavior before any download is permitted. Network/UNC model folders are rejected. Clearing the local model selection returns HighlightMiner to the configured managed/cached model.
+
+The normal model selector intentionally keeps the common choices short and ordered: **large-v3** (the HighlightMiner default), **turbo**, **medium**, and **small**. Other standard faster-whisper aliases and deliberately chosen custom Hugging Face repositories are available through **Other / advanced…** instead of filling the ordinary dropdown with every supported alias.
 
 ## Weighting presets
 
