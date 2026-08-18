@@ -75,20 +75,23 @@ if (-not (Test-Path $buildPython)) {
     $pythonArguments = @()
     $selectedVersion = $null
 
-    if ($pyLauncher) {
+    # Prefer PATH so CI respects actions/setup-python and local shells use the
+    # interpreter the user deliberately selected. Fall back to the Windows
+    # launcher only when PATH does not expose a compatible Python.
+    if ($pythonCommand) {
+        $pathVersion = Get-PythonVersionInfo -Executable $pythonCommand.Source
+        if (Test-CompatiblePython $pathVersion) {
+            $pythonExecutable = $pythonCommand.Source
+            $selectedVersion = $pathVersion
+        }
+    }
+
+    if (-not $pythonExecutable -and $pyLauncher) {
         $launcherVersion = Get-PythonVersionInfo -Executable $pyLauncher.Source -Arguments @("-3")
         if (Test-CompatiblePython $launcherVersion) {
             $pythonExecutable = $pyLauncher.Source
             $pythonArguments = @("-3")
             $selectedVersion = $launcherVersion
-        }
-    }
-
-    if (-not $pythonExecutable -and $pythonCommand) {
-        $pathVersion = Get-PythonVersionInfo -Executable $pythonCommand.Source
-        if (Test-CompatiblePython $pathVersion) {
-            $pythonExecutable = $pythonCommand.Source
-            $selectedVersion = $pathVersion
         }
     }
 
