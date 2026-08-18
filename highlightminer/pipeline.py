@@ -300,9 +300,9 @@ def analyze_vod(
             "content_label": normalized_content_label,
             "mining_profile": mining_profile,
         }
+        stage_started_at = time.perf_counter()
         try:
             progress("Applying personal reranker", 0.92)
-            stage_started_at = time.perf_counter()
             prepared_learning = prepare_preference_model(db_path)
             candidates, learning_info = rerank_candidates(
                 candidates,
@@ -311,7 +311,6 @@ def analyze_vod(
                 content_label=normalized_content_label,
                 mining_profile=mining_profile,
             )
-            timings["personal_rerank_seconds"] = _elapsed_since(stage_started_at)
             learning_info.update(
                 {
                     "state": prepared_learning.training.state,
@@ -320,7 +319,6 @@ def analyze_vod(
                 }
             )
         except Exception as exc:
-            timings["personal_rerank_seconds"] = _elapsed_since(stage_started_at)
             learning_info = {
                 "active": False,
                 "state": "error",
@@ -328,8 +326,10 @@ def analyze_vod(
                 "content_label": normalized_content_label,
                 "mining_profile": mining_profile,
             }
+        finally:
+            timings["personal_rerank_seconds"] = _elapsed_since(stage_started_at)
 
-        timings["processing_before_database_save_seconds"] = _elapsed_since(pipeline_started_at)
+        timings["pipeline_elapsed_seconds"] = _elapsed_since(pipeline_started_at)
         cache_info = {
             "reused": cache_from,
             "reused_stages": sorted(cache_from),
