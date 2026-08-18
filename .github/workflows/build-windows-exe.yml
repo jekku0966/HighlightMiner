@@ -7,6 +7,7 @@ on:
     paths:
       - "highlightminer/**"
       - "tests/**"
+      - "tools/**"
       - "HighlightMiner.spec"
       - "build_windows.ps1"
       - "BUILD_WINDOWS.md"
@@ -45,8 +46,8 @@ jobs:
         id: project
         shell: powershell
         run: |
-          $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"
-          if (-not $version) { throw "Could not read project version from pyproject.toml." }
+          $version = python .\tools\project_version.py
+          if ($LASTEXITCODE -ne 0 -or -not $version) { throw "Could not read project version from pyproject.toml." }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Packaging HighlightMiner v$version for windows-x64"
 
@@ -108,15 +109,16 @@ jobs:
           $stderrLog = Join-Path $env:RUNNER_TEMP "highlightminer-ui.stderr.log"
           Remove-Item $stdoutLog, $stderrLog -Force -ErrorAction SilentlyContinue
 
-          $process = Start-Process `
-            -FilePath $exe `
-            -WorkingDirectory ".\dist\HighlightMiner" `
-            -RedirectStandardOutput $stdoutLog `
-            -RedirectStandardError $stderrLog `
-            -PassThru
+          $process = $null
           $ready = $false
-
           try {
+            $process = Start-Process `
+              -FilePath $exe `
+              -WorkingDirectory ".\dist\HighlightMiner" `
+              -RedirectStandardOutput $stdoutLog `
+              -RedirectStandardError $stderrLog `
+              -PassThru
+
             for ($i = 0; $i -lt 60; $i++) {
               Start-Sleep -Seconds 1
               try {
@@ -142,7 +144,7 @@ jobs:
             Write-Host "Frozen headless Streamlit backend responded successfully."
           }
           finally {
-            if (-not $process.HasExited) {
+            if ($process -and -not $process.HasExited) {
               & taskkill.exe /PID $process.Id /T /F | Out-Null
             }
 

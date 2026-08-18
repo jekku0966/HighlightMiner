@@ -8,39 +8,100 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $repoRoot
 
-$pyprojectPath = Join-Path $repoRoot "pyproject.toml"
-$pyprojectText = Get-Content $pyprojectPath -Raw
-if ($pyprojectText -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
-    throw "Could not read project version from pyproject.toml."
-}
-$version = $Matches[1]
-
 $hostArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
 if ($hostArchitecture -ne "X64") {
     throw "HighlightMiner Windows release packaging currently supports x64 only. Detected architecture: $hostArchitecture"
 }
 
-$packageName = "HighlightMiner-v$version-windows-x64"
+function Get-PythonVersionInfo {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Executable,
+        [string[]]$Arguments = @()
+    )
 
-Write-Host "HighlightMiner Windows build"
-Write-Host "============================"
-Write-Host "Version:      $version"
-Write-Host "Architecture: windows-x64"
-Write-Host ""
+    try {
+        $versionOutput = & $Executable @Arguments --version 2>&1
+    }
+    catch {
+        return $null
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        return $null
+    }
+
+    $versionMatch = [regex]::Match(($versionOutput -join " "), 'Python\s+(\d+)\.(\d+)(?:\.(\d+))?')
+    if (-not $versionMatch.Success) {
+        return $null
+    }
+
+    return [PSCustomObject]@{
+        Major = [int]$versionMatch.Groups[1].Value
+        Minor = [int]$versionMatch.Groups[2].Value
+        Label = "$($versionMatch.Groups[1].Value).$($versionMatch.Groups[2].Value)"
+    }
+}
+
+function Test-CompatiblePython {
+    param($VersionInfo)
+
+    return $null -ne $VersionInfo -and (
+        $VersionInfo.Major -gt 3 -or
+        ($VersionInfo.Major -eq 3 -and $VersionInfo.Minor -ge 10)
+    )
+}
 
 $buildVenv = Join-Path $repoRoot ".build-venv"
 $buildPython = Join-Path $buildVenv "Scripts\python.exe"
 
+if (Test-Path $buildPython) {
+    $existingVersion = Get-PythonVersionInfo -Executable $buildPython
+    if (-not (Test-CompatiblePython $existingVersion)) {
+        Write-Host "Existing build environment has an unsupported or unreadable Python version. Recreating..."
+        Remove-Item $buildVenv -Recurse -Force
+    }
+    else {
+        Write-Host "Reusing .build-venv with Python $($existingVersion.Label)."
+    }
+}
+
 if (-not (Test-Path $buildPython)) {
     Write-Host "Creating isolated build environment..."
-    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+
     $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
-    if ($pythonCommand) { & python -m venv $buildVenv }
-    elseif ($pyLauncher) { & py -3 -m venv $buildVenv }
-    else { throw "Python 3.10+ was not found. Install Python first or put it on PATH." }
-    if ($LASTEXITCODE -ne 0) { throw "Failed to create the build virtual environment." }
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    $pythonExecutable = $null
+    $pythonArguments = @()
+    $selectedVersion = $null
+
+    if ($pyLauncher) {
+        $launcherVersion = Get-PythonVersionInfo -Executable $pyLauncher.Source -Arguments @("-3")
+        if (Test-CompatiblePython $launcherVersion) {
+            $pythonExecutable = $pyLauncher.Source
+            $pythonArguments = @("-3")
+            $selectedVersion = $launcherVersion
+        }
+    }
+
+    if (-not $pythonExecutable -and $pythonCommand) {
+        $pathVersion = Get-PythonVersionInfo -Executable $pythonCommand.Source
+        if (Test-CompatiblePython $pathVersion) {
+            $pythonExecutable = $pythonCommand.Source
+            $selectedVersion = $pathVersion
+        }
+    }
+
+    if (-not $pythonExecutable) {
+        throw "Python 3.10 or newer is required. Install it or expose it through the 'py' launcher or PATH."
+    }
+
+    Write-Host "Creating the build environment with Python $($selectedVersion.Label)..."
+    & $pythonExecutable @pythonArguments -m venv $buildVenv
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $buildPython)) {
+        throw "Failed to create the build virtual environment."
+    }
 }
-else { Write-Host "Reusing existing .build-venv." }
 
 Write-Host "Updating build tooling..."
 & $buildPython -m pip install --upgrade pip
@@ -49,6 +110,21 @@ if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed." }
 Write-Host "Installing HighlightMiner + build dependencies..."
 & $buildPython -m pip install -e ".[dev,packaging]"
 if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+
+$versionScript = Join-Path $repoRoot "tools\project_version.py"
+$versionOutput = & $buildPython $versionScript
+if ($LASTEXITCODE -ne 0 -or -not $versionOutput) {
+    throw "Could not read project.version through tools/project_version.py."
+}
+$version = ($versionOutput -join "").Trim()
+$packageName = "HighlightMiner-v$version-windows-x64"
+
+Write-Host ""
+Write-Host "HighlightMiner Windows build"
+Write-Host "============================"
+Write-Host "Version:      $version"
+Write-Host "Architecture: windows-x64"
+Write-Host ""
 
 if (-not $SkipTests) {
     Write-Host ""
@@ -112,19 +188,34 @@ foreach ($name in @("ffmpeg.exe", "ffprobe.exe")) {
     }
 }
 
-$cudaPatterns = @('^cublas.*\.dll$', '^cudnn.*\.dll$', '^nvrtc.*\.dll$', '^zlibwapi\.dll$')
-$cudaFiles = Get-ChildItem -Path $repoRoot -File -Filter "*.dll" -ErrorAction SilentlyContinue | Where-Object {
-    $name = $_.Name
-    ($cudaPatterns | Where-Object { $name -match $_ }).Count -gt 0
-}
-foreach ($file in $cudaFiles) { Copy-Item $file.FullName (Join-Path $distRoot $file.Name) -Force }
+$cudaRuntimeRoot = Join-Path $repoRoot "runtime\cuda"
+$requiredCudaDlls = @(
+    "cublas64_12.dll",
+    "cublasLt64_12.dll",
+    "cudnn64_9.dll",
+    "cudnn_adv64_9.dll",
+    "cudnn_cnn64_9.dll",
+    "cudnn_engines_precompiled64_9.dll",
+    "cudnn_engines_runtime_compiled64_9.dll",
+    "cudnn_graph64_9.dll",
+    "cudnn_heuristic64_9.dll",
+    "cudnn_ops64_9.dll"
+)
+$optionalCudaDlls = @("zlibwapi.dll")
 
-$coreCuda = @("cublas64_12.dll", "cublasLt64_12.dll", "cudnn64_9.dll")
-$missingCoreCuda = @($coreCuda | Where-Object { -not (Test-Path (Join-Path $distRoot $_)) })
-if ($missingCoreCuda.Count -gt 0) {
-    Write-Warning ("Portable CUDA runtime is incomplete in the build: " + ($missingCoreCuda -join ", "))
+foreach ($name in @($requiredCudaDlls + $optionalCudaDlls)) {
+    $source = Join-Path $cudaRuntimeRoot $name
+    if (Test-Path $source) {
+        Copy-Item $source (Join-Path $distRoot $name) -Force
+    }
 }
-else { Write-Host "Copied portable CUDA 12 / cuDNN 9 runtime DLLs." }
+
+$missingRequiredCuda = @($requiredCudaDlls | Where-Object { -not (Test-Path (Join-Path $distRoot $_)) })
+if ($missingRequiredCuda.Count -gt 0) {
+    Write-Warning ("Portable CUDA runtime was not fully added from runtime\cuda: " + ($missingRequiredCuda -join ", "))
+    Write-Warning "The packaged app still supports CPU and a compatible system CUDA installation."
+}
+else { Write-Host "Copied portable CUDA 12 / cuDNN 9 runtime DLLs from runtime\cuda." }
 
 Write-Host ""
 Write-Host "Smoke-testing executable entry point..."
@@ -136,7 +227,7 @@ Write-Host "Smoke-testing embedded desktop runtime imports..."
 & $exePath __desktop_probe__
 if ($LASTEXITCODE -ne 0) { throw "HighlightMiner.exe could not import the packaged pywebview/WebView2 backend." }
 
-if ($ffmpegCopied -and $missingCoreCuda.Count -eq 0) {
+if ($ffmpegCopied -and $missingRequiredCuda.Count -eq 0) {
     Write-Host ""
     Write-Host "Running packaged environment check..."
     & $exePath doctor
