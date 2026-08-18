@@ -12,6 +12,8 @@ The `v0.2-dev` branch introduces guard rails around untrusted inputs and persist
 - Standard faster-whisper model names are allowed by default. Arbitrary custom model repositories require explicit opt-in in the Settings UI or `allow_custom_whisper_model=true` in an imported profile.
 - Numeric settings and scoring weights are range-validated before a settings profile can be used for analysis.
 - GitHub Actions dependencies are pinned to full commit SHAs and the workflow token is read-only.
+- Windows builds validate the Python interpreter used by `.build-venv` instead of silently reusing an unreadable or unsupported environment.
+- Portable CUDA packaging copies only an explicit CUDA 12 / cuDNN 9 DLL allowlist from `runtime\cuda`; arbitrary repository DLLs are not swept into release builds.
 - Release builds generate a SHA-256 checksum for the portable ZIP.
 
 These measures reduce accidental damage and common local-app trust-boundary problems. They are not a sandbox. HighlightMiner invokes FFmpeg and native CUDA/CTranslate2 libraries, so only run binaries obtained from trusted sources.
@@ -75,9 +77,9 @@ The database is SQLite, not encrypted. Anyone who can read the file can inspect 
 
 ## Local executable/DLL trust
 
-HighlightMiner intentionally supports portable executables and DLLs beside the application, including FFmpeg and CUDA/cuDNN runtime files. Anyone who can replace trusted runtime files in the HighlightMiner folder may be able to cause arbitrary native code to run when HighlightMiner starts or invokes that component.
+HighlightMiner intentionally supports portable executables and DLLs, including FFmpeg and CUDA/cuDNN runtime files. In source mode, the preferred CUDA runtime location is `runtime\cuda`; packaged builds copy the allowlisted CUDA/cuDNN files beside `HighlightMiner.exe`. The older source-root CUDA layout remains a compatibility fallback but is not used as a packaging source.
 
-Do not run HighlightMiner from a shared or world-writable directory. Obtain FFmpeg/CUDA runtime files from trusted sources and verify release checksums where available.
+Anyone who can replace trusted runtime files in the selected CUDA directory or packaged HighlightMiner folder may be able to cause arbitrary native code to run when HighlightMiner starts or invokes that component. Do not run HighlightMiner from a shared or world-writable directory. Obtain FFmpeg/CUDA runtime files from trusted sources and verify release checksums where available.
 
 ## Network behavior
 
@@ -85,9 +87,9 @@ Expected network access includes the first-time faster-whisper model download th
 
 ## CI and release integrity
 
-The Windows build workflow uses read-only repository permission, pins GitHub Actions to immutable commit SHAs, runs unit tests, smoke-tests frozen CTranslate2/faster-whisper and pywebview/WebView2 imports, smoke-tests the packaged Streamlit backend in server-only mode, verifies bundled user documentation, and generates `SHA256SUMS.txt` for the release ZIP.
+The Windows build workflow uses read-only repository permission, pins GitHub Actions to immutable commit SHAs, runs unit tests, smoke-tests frozen CTranslate2/faster-whisper and pywebview/WebView2 imports, smoke-tests the packaged Streamlit backend in server-only mode, verifies bundled user documentation, and generates `SHA256SUMS.txt` for the release ZIP. CI process cleanup also guards failed process startup so cleanup cannot obscure the original failure.
 
-The release SHA-256 protects against modification after publication only when the checksum itself is obtained from a trusted location.
+The release SHA-256 protects against modification after publication only when the checksum itself is obtained from a trusted location. Runtime binaries copied into a local build are still trusted inputs; HighlightMiner does not currently maintain a project-owned hash manifest for third-party FFmpeg/CUDA binaries.
 
 ## Reporting a security issue
 
