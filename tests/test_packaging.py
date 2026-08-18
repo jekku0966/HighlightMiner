@@ -24,3 +24,10 @@ def test_project_version_rejects_missing_project_version(tmp_path: Path) -> None
 def test_portable_runtime_staging_directories_are_tracked() -> None:
     assert (ROOT / "bin" / ".gitkeep").is_file()
     assert (ROOT / "runtime" / "cuda" / ".gitkeep").is_file()
+
+
+def test_public_windows_ci_is_validation_only() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "build-windows-exe.yml").read_text(encoding="utf-8")
+
+    assert "build_windows.ps1 -SkipZip" in workflow
+    assert "actions/upload-artifact@" not in workflow
