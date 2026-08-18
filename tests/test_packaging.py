@@ -19,3 +19,8 @@ def test_project_version_rejects_missing_project_version(tmp_path: Path) -> None
 
     with pytest.raises(ValueError, match="project.version"):
         read_project_version(pyproject)
+
+
+def test_portable_runtime_staging_directories_are_tracked() -> None:
+    assert (ROOT / "bin" / ".gitkeep").is_file()
+    assert (ROOT / "runtime" / "cuda" / ".gitkeep").is_file()
