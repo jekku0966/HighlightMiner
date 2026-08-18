@@ -71,6 +71,41 @@ def test_same_vod_gets_multiple_runs_and_reusable_stages(tmp_path: Path) -> None
     assert cache["chat"][0]["count"] == 5
 
 
+def test_skipped_transcript_run_does_not_shadow_older_valid_cache(tmp_path: Path) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"cache guard" * 10000)
+    db = tmp_path / "highlightminer.db"
+
+    _save(db, video)
+    skipped = _analysis(video, score=0.70)
+    skipped["transcription"] = {
+        "status": "skipped",
+        "reason": "model_downloads_disabled",
+        "model": "large-v3",
+    }
+    save_analysis(
+        db,
+        skipped,
+        transcript=[],
+        audio_features=[{"time": 42.0, "dbfs": -11.0, "energy": 0.7, "onset": 0.5, "score": 0.70}],
+        chat_features=[{"time": 42.5, "count": 4, "ratio": 1.8, "score": 0.35}],
+        work_dir=video.parent,
+        source=describe_source(video),
+        signatures={"audio": "audio-a", "transcript": None, "chat": "chat-a"},
+    )
+
+    source, _runs = find_source_runs(db, video)
+    cache = load_reusable_features(
+        db,
+        source["id"],
+        audio_signature="audio-a",
+        transcript_signature="tx-a",
+        chat_signature="chat-a",
+    )
+
+    assert cache["transcript"][0]["text"] == "what the fuck"
+
+
 def test_learning_keeps_unreviewed_as_unlabeled(tmp_path: Path) -> None:
     video = tmp_path / "vod.mp4"
     video.write_bytes(b"learning" * 1000)
