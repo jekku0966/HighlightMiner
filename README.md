@@ -47,11 +47,14 @@ New analyses no longer need durable `analysis.json`, `review.json`, `transcript.
 Use **⚙️ Settings** in the sidebar instead of hand-editing JSON. The page provides:
 
 - Whisper model/device/compute/language/beam/VAD controls;
+- explicit recognition-model download permission and local-model selection;
 - candidate threshold/count and clip timing controls;
 - audio analysis window/hop controls;
 - `0.00–1.00` Audio / Transcript / Chat weight sliders with effective normalized percentages;
 - editable reaction phrases;
 - **Save settings**, **Reset defaults**, **Import settings**, and **Export settings**.
+
+HighlightMiner never silently opts the user into downloading a speech-recognition model. A fresh database asks **Allow model downloads** or **No model downloads**. The decision is stored locally in SQLite and can be changed later. Users can also point HighlightMiner at a manually downloaded local CTranslate2 Whisper model folder; local model selection works without granting download permission. Imported settings files cannot grant model-download consent.
 
 Signal presets are **Balanced**, **Reaction-heavy**, **Chat-heavy**, and **Audio-heavy**. Presets alter weights only; they never secretly change Whisper, thresholds, or clip timing. Manual weighting becomes **Custom**. If chat is absent, its weight becomes zero and audio/transcript are renormalized automatically.
 
@@ -129,7 +132,7 @@ Use **Import v0.1 analysis.json** in the sidebar. HighlightMiner migrates the an
 
 ## Security posture
 
-The dev branches include local-file validation, automatic UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, validation-only public Windows CI, and SHA-256/manifest provenance for official release assets.
+The dev branches include local-file validation, automatic UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, explicit model-download consent, local-only manual model selection, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, validation-only public Windows CI, and SHA-256/manifest provenance for official release assets.
 
 The sampled VOD fingerprint is for source identity, not security/integrity verification. See `SECURITY.md`.
 
