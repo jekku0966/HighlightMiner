@@ -96,6 +96,43 @@ def test_transcription_skips_malformed_segments_and_normalizes_valid_metadata(mo
     assert progress_updates[-1][1] >= 0.999
 
 
+def test_cuda_transcription_omits_cpu_thread_metadata(monkeypatch) -> None:
+    info = types.SimpleNamespace(language="en", language_probability=1.0)
+    model_inits: list[dict] = []
+
+    class FakeModel:
+        def __init__(self, *_args, **kwargs) -> None:
+            model_inits.append(kwargs)
+
+        def transcribe(self, _source: str, **_kwargs):
+            return iter([]), info
+
+    def fail_cpu_thread_count() -> int:
+        raise AssertionError("CPU thread budgeting must not run for CUDA")
+
+    fake_module = types.ModuleType("faster_whisper")
+    fake_module.WhisperModel = FakeModel
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
+    monkeypatch.setattr(transcribe, "resolve_device", lambda _settings: ("cuda", "float16"))
+    monkeypatch.setattr(transcribe, "_cpu_thread_count", fail_cpu_thread_count)
+
+    _rows, metadata = transcribe_audio(
+        "ignored.wav",
+        Settings(),
+        prepared_model=PreparedModelReference(
+            reference="large-v3",
+            local_files_only=True,
+            source="cache",
+            display_name="large-v3",
+        ),
+    )
+
+    assert model_inits[0]["device"] == "cuda"
+    assert "cpu_threads" not in model_inits[0]
+    assert metadata["device"] == "cuda"
+    assert "cpu_threads" not in metadata
+
+
 def test_cuda_initialization_fallback_applies_cpu_thread_budget(monkeypatch) -> None:
     info = types.SimpleNamespace(language="en", language_probability=1.0)
     model_inits: list[dict] = []
