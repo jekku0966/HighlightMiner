@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import streamlit as st
 
@@ -34,15 +36,33 @@ _EDITOR_KEYS = {
     "preset": "cfg_preset",
 }
 
+_PRIMARY_WHISPER_MODELS = ("large-v3", "turbo", "medium", "small")
+_ADVANCED_WHISPER_MODEL = "Other / advanced…"
+
+
+def _model_editor_values(settings: Settings) -> tuple[str, str]:
+    if settings.whisper_model in _PRIMARY_WHISPER_MODELS:
+        return settings.whisper_model, ""
+    return _ADVANCED_WHISPER_MODEL, settings.whisper_model
+
+
+def _editor_needs_seed(state: Mapping[str, Any]) -> bool:
+    required_names = [name for name in _EDITOR_KEYS if name != "custom_model"]
+    if any(_EDITOR_KEYS[name] not in state for name in required_names):
+        return True
+    if state.get(_EDITOR_KEYS["model"]) == _ADVANCED_WHISPER_MODEL:
+        return _EDITOR_KEYS["custom_model"] not in state
+    return False
+
 
 def _seed_editor(settings: Settings, *, force: bool = False) -> None:
-    if not force and st.session_state.get("settings_editor_seeded"):
+    if not force and not _editor_needs_seed(st.session_state):
         return
     normalized = normalize_weights(settings.weights)
-    model = settings.whisper_model if settings.whisper_model in _STANDARD_WHISPER_MODELS else "Custom…"
+    model, custom_model = _model_editor_values(settings)
     values = {
         "model": model,
-        "custom_model": "" if model != "Custom…" else settings.whisper_model,
+        "custom_model": custom_model,
         "device": settings.device,
         "compute": settings.compute_type,
         "language": settings.language or "",
@@ -64,7 +84,6 @@ def _seed_editor(settings: Settings, *, force: bool = False) -> None:
     }
     for name, value in values.items():
         st.session_state[_EDITOR_KEYS[name]] = value
-    st.session_state["settings_editor_seeded"] = True
 
 
 def _request_reload(message: str) -> None:
@@ -94,12 +113,12 @@ def _browse_export() -> None:
 
 def _build_settings() -> Settings:
     model_choice = str(st.session_state[_EDITOR_KEYS["model"]])
-    custom = model_choice == "Custom…"
-    model = str(st.session_state[_EDITOR_KEYS["custom_model"]]).strip() if custom else model_choice
+    advanced = model_choice == _ADVANCED_WHISPER_MODEL
+    model = str(st.session_state.get(_EDITOR_KEYS["custom_model"], "")).strip() if advanced else model_choice
     phrases = [line.strip() for line in str(st.session_state[_EDITOR_KEYS["reactions"]]).splitlines() if line.strip()]
     return Settings(
         whisper_model=model,
-        allow_custom_whisper_model=custom,
+        allow_custom_whisper_model=bool(advanced and model not in _STANDARD_WHISPER_MODELS),
         device=str(st.session_state[_EDITOR_KEYS["device"]]),
         compute_type=str(st.session_state[_EDITOR_KEYS["compute"]]),
         language=str(st.session_state[_EDITOR_KEYS["language"]]).strip() or None,
@@ -140,9 +159,19 @@ def render_settings_page(db_path: Path) -> None:
     with engine:
         render_model_access_settings(db_path)
         st.divider()
-        st.selectbox("Whisper model", list(_STANDARD_WHISPER_MODELS) + ["Custom…"], key=_EDITOR_KEYS["model"])
-        if st.session_state[_EDITOR_KEYS["model"]] == "Custom…":
-            st.text_input("Custom Hugging Face model", key=_EDITOR_KEYS["custom_model"], help="Advanced opt-in: only use model repositories you trust. A network download still requires the separate model-download permission above.")
+        st.selectbox(
+            "Whisper model",
+            list(_PRIMARY_WHISPER_MODELS) + [_ADVANCED_WHISPER_MODEL],
+            key=_EDITOR_KEYS["model"],
+            help="large-v3 is HighlightMiner's default. Turbo is the faster general-purpose option. Use Other / advanced only when you deliberately want a different standard alias or custom Hugging Face model.",
+        )
+        if st.session_state[_EDITOR_KEYS["model"]] == _ADVANCED_WHISPER_MODEL:
+            st.text_input(
+                "Other model name",
+                key=_EDITOR_KEYS["custom_model"],
+                placeholder="e.g. base.en or organization/model-name",
+                help="Advanced opt-in. Standard faster-whisper aliases remain standard; arbitrary repositories are treated as custom models. A network download still requires the separate permission above.",
+            )
         c1, c2 = st.columns(2)
         with c1:
             st.selectbox("Device", ["auto", "cuda", "cpu"], key=_EDITOR_KEYS["device"])
@@ -173,7 +202,10 @@ def render_settings_page(db_path: Path) -> None:
             m1.metric("Effective audio", f"{effective['audio']:.1%}")
             m2.metric("Effective transcript", f"{effective['transcript']:.1%}")
             m3.metric("Effective chat", f"{effective['chat']:.1%}")
-            st.caption(f"Current weighting matches: **{detect_weight_preset(raw_weights)}**. If no chat is supplied, chat becomes 0% and audio/transcript are renormalized automatically.")
+            st.caption(
+                f"Current weighting matches: **{detect_weight_preset(raw_weights)}**. "
+                "If transcript or chat is unavailable during a run, that signal becomes 0% and the available signals are renormalized automatically."
+            )
         else:
             st.error("At least one signal weight must be greater than zero.")
 
