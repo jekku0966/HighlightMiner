@@ -123,7 +123,7 @@ def test_pipeline_records_stage_timings_and_maps_transcription_progress(tmp_path
         "audio_analysis_seconds",
         "transcription_seconds",
         "candidate_ranking_seconds",
-        "processing_before_database_save_seconds",
+        "pipeline_elapsed_seconds",
     ):
         assert key in timing
         assert timing[key] >= 0.0
