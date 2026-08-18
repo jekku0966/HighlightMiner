@@ -127,8 +127,14 @@ class Settings:
             phrases.append(text)
         self.reaction_phrases = phrases
 
-    def normalized_weights(self, chat_available: bool) -> dict[str, float]:
+    def normalized_weights(
+        self,
+        chat_available: bool,
+        transcript_available: bool = True,
+    ) -> dict[str, float]:
         weights = dict(self.weights)
+        if not transcript_available:
+            weights["transcript"] = 0.0
         if not chat_available:
             weights["chat"] = 0.0
         total = sum(max(0.0, float(v)) for v in weights.values()) or 1.0
