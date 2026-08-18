@@ -6,6 +6,7 @@ import streamlit as st
 
 from .model_access import (
     ModelAccessPreferences,
+    huggingface_cache_directory,
     load_model_access,
     models_root,
     save_model_access,
@@ -26,7 +27,11 @@ _MODEL_ACCESS_SYNC_KEY = "model_access_editor_persisted_value"
 
 def _sync_editor_with_persisted(preferences: ModelAccessPreferences) -> None:
     persisted = (preferences.download_consent, preferences.local_model_path or "")
-    if st.session_state.get(_MODEL_ACCESS_SYNC_KEY) == persisted:
+    editor_present = (
+        _CONSENT_EDITOR_KEY in st.session_state
+        and _LOCAL_MODEL_EDITOR_KEY in st.session_state
+    )
+    if st.session_state.get(_MODEL_ACCESS_SYNC_KEY) == persisted and editor_present:
         return
     st.session_state[_CONSENT_EDITOR_KEY] = _CONSENT_LABELS.get(
         preferences.download_consent,
@@ -39,6 +44,7 @@ def _sync_editor_with_persisted(preferences: ModelAccessPreferences) -> None:
 def render_model_access_settings(db_path: Path) -> None:
     preferences = load_model_access(db_path)
     root = models_root()
+    cache_root = huggingface_cache_directory()
     _sync_editor_with_persisted(preferences)
 
     st.subheader("Model access")
@@ -61,10 +67,11 @@ def render_model_access_settings(db_path: Path) -> None:
         folder=True,
     )
     st.caption(
-        f"A local model overrides the selected Hugging Face model and never needs a model download. "
-        f"You can keep manually downloaded models under `{root}` or anywhere else on a local drive. "
-        "Choose the actual CTranslate2 model folder containing config.json, model.bin, and tokenizer.json."
+        "This field is only for a model you add manually. Choose the actual CTranslate2 model folder containing "
+        "config.json, model.bin, and tokenizer.json."
     )
+    st.caption(f"Manual models folder: `{root}` — it is normal for this folder to be empty until you add a model yourself.")
+    st.caption(f"Downloaded-model cache: `{cache_root}` — models fetched by faster-whisper/Hugging Face are stored here instead of the manual models folder.")
 
     if local_path:
         try:
