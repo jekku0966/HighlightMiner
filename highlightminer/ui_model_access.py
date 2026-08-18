@@ -19,21 +19,34 @@ _CONSENT_LABELS = {
     "deny": "Never download models",
 }
 _LABEL_TO_CONSENT = {label: value for value, label in _CONSENT_LABELS.items()}
+_CONSENT_EDITOR_KEY = "model_download_consent_editor"
+_LOCAL_MODEL_EDITOR_KEY = "local_whisper_model_path_editor"
+_MODEL_ACCESS_SYNC_KEY = "model_access_editor_persisted_value"
+
+
+def _sync_editor_with_persisted(preferences: ModelAccessPreferences) -> None:
+    persisted = (preferences.download_consent, preferences.local_model_path or "")
+    if st.session_state.get(_MODEL_ACCESS_SYNC_KEY) == persisted:
+        return
+    st.session_state[_CONSENT_EDITOR_KEY] = _CONSENT_LABELS.get(
+        preferences.download_consent,
+        _CONSENT_LABELS["unset"],
+    )
+    st.session_state[_LOCAL_MODEL_EDITOR_KEY] = preferences.local_model_path or ""
+    st.session_state[_MODEL_ACCESS_SYNC_KEY] = persisted
 
 
 def render_model_access_settings(db_path: Path) -> None:
     preferences = load_model_access(db_path)
     root = models_root()
+    _sync_editor_with_persisted(preferences)
 
     st.subheader("Model access")
     labels = list(_CONSENT_LABELS.values())
-    current_label = _CONSENT_LABELS.get(preferences.download_consent, _CONSENT_LABELS["unset"])
-    if "model_download_consent_editor" not in st.session_state:
-        st.session_state["model_download_consent_editor"] = current_label
     st.radio(
         "Recognition-model downloads",
         labels,
-        key="model_download_consent_editor",
+        key=_CONSENT_EDITOR_KEY,
         help=(
             "This permission is local to this HighlightMiner database. Imported settings files cannot grant download permission. "
             "Ask means HighlightMiner prompts only when a fresh transcript actually needs an uncached model."
@@ -42,7 +55,7 @@ def render_model_access_settings(db_path: Path) -> None:
 
     local_path = path_picker(
         "Local Whisper model folder (optional)",
-        "local_whisper_model_path_editor",
+        _LOCAL_MODEL_EDITOR_KEY,
         default=preferences.local_model_path or "",
         placeholder=str(root / "your-model-folder"),
         folder=True,
@@ -62,10 +75,16 @@ def render_model_access_settings(db_path: Path) -> None:
 
     if st.button("Save model access", width="stretch"):
         try:
-            consent = _LABEL_TO_CONSENT[str(st.session_state["model_download_consent_editor"])]
+            consent = _LABEL_TO_CONSENT[str(st.session_state[_CONSENT_EDITOR_KEY])]
             saved = save_model_access(
                 ModelAccessPreferences(consent, local_path or None),
                 db_path,
+            )
+            st.session_state[_CONSENT_EDITOR_KEY] = _CONSENT_LABELS[saved.download_consent]
+            st.session_state[_LOCAL_MODEL_EDITOR_KEY] = saved.local_model_path or ""
+            st.session_state[_MODEL_ACCESS_SYNC_KEY] = (
+                saved.download_consent,
+                saved.local_model_path or "",
             )
             st.success(
                 "Model access saved. "
