@@ -142,23 +142,41 @@ $distRoot = Join-Path $repoRoot "dist\HighlightMiner"
 $exePath = Join-Path $distRoot "HighlightMiner.exe"
 if (-not (Test-Path $exePath)) { throw "Build completed without producing $exePath" }
 
+$releaseDocumentsPath = Join-Path $repoRoot "tools\release_documents.json"
+if (-not (Test-Path $releaseDocumentsPath -PathType Leaf)) {
+    throw "Release document manifest is missing: $releaseDocumentsPath"
+}
+try {
+    $releaseDocumentConfig = Get-Content $releaseDocumentsPath -Raw -Encoding utf8 | ConvertFrom-Json
+}
+catch {
+    throw "Could not parse tools\release_documents.json: $($_.Exception.Message)"
+}
+$releaseDocuments = @($releaseDocumentConfig.required)
+foreach ($name in @($releaseDocumentConfig.optional)) {
+    if (Test-Path (Join-Path $repoRoot $name) -PathType Leaf) {
+        $releaseDocuments += $name
+    }
+}
+if ($releaseDocuments.Count -eq 0) {
+    throw "Release document manifest did not define any documents."
+}
+
 Write-Host ""
 Write-Host "Adding user-facing files..."
-foreach ($name in @(
-    "settings.json",
-    "README.md",
-    "V0.2_DEV.md",
-    "RERUNS_AND_LEARNING.md",
-    "SETTINGS.md",
-    "BUILD_WINDOWS.md",
-    "CUDA_SETUP.md",
-    "ATTRIBUTIONS.md",
-    "SECURITY.md",
-    "CHANGELOG.md",
-    "LICENSE"
-)) {
+$settingsSource = Join-Path $repoRoot "settings.json"
+if (Test-Path $settingsSource -PathType Leaf) {
+    Copy-Item $settingsSource (Join-Path $distRoot "settings.json") -Force
+}
+foreach ($name in $releaseDocuments) {
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        throw "Release document manifest contains an empty document name."
+    }
     $source = Join-Path $repoRoot $name
-    if (Test-Path $source) { Copy-Item $source (Join-Path $distRoot $name) -Force }
+    if (-not (Test-Path $source -PathType Leaf)) {
+        throw "Required release document is missing: $name"
+    }
+    Copy-Item $source (Join-Path $distRoot $name) -Force
 }
 
 $streamlitConfigSource = Join-Path $repoRoot ".streamlit"
