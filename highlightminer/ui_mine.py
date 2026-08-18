@@ -23,8 +23,18 @@ from .security import validate_local_video
 from .settings_presets import detect_weight_preset, normalize_weights
 from .settings_store import load_app_settings
 from .storage import find_source_runs, import_legacy_analysis, learning_summary, list_analyses, load_analysis, record_export
+from .transcription_status import is_transcription_skipped
 from .ui_common import _CHAT_FILTER, _JSON_FILTER, _VIDEO_FILTER, choose_folder, default_work_dir, path_picker, render_shutdown
 from .util import format_time
+
+_PENDING_MODEL_ANALYSIS_KEY = "pending_model_analysis"
+_PENDING_RERUN_KEY = "pending_rerun"
+
+
+def _clear_pending_analysis_state() -> None:
+    """Clear transient state for an analysis attempt without unloading history."""
+    st.session_state.pop(_PENDING_MODEL_ANALYSIS_KEY, None)
+    st.session_state.pop(_PENDING_RERUN_KEY, None)
 
 
 def _learning_view(candidate: dict) -> dict:
@@ -98,7 +108,7 @@ def _run_analysis_ui(
     reused = analysis.get("cache", {}).get("reused_stages", [])
     learning = dict(analysis.get("cache", {}).get("learning") or {})
     notices = []
-    if analysis.get("transcription", {}).get("status") == "skipped":
+    if is_transcription_skipped(analysis.get("transcription")):
         notices.append(
             "Speech recognition was skipped; this run used audio"
             + (" and chat" if analysis.get("chat", {}).get("path") else "")
@@ -121,7 +131,7 @@ def _run_analysis_ui(
 
 
 def _queue_model_decision(exc: ModelDecisionRequired, **analysis_args) -> None:
-    st.session_state["pending_model_analysis"] = {
+    st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = {
         **analysis_args,
         "message": str(exc),
     }
@@ -133,7 +143,7 @@ def _resume_pending_model_analysis(
     allow_model_download: bool = False,
     skip_transcription: bool = False,
 ) -> None:
-    pending = dict(st.session_state.get("pending_model_analysis") or {})
+    pending = dict(st.session_state.get(_PENDING_MODEL_ANALYSIS_KEY) or {})
     if not pending:
         return
     pending.pop("message", None)
@@ -148,15 +158,15 @@ def _resume_pending_model_analysis(
         _queue_model_decision(exc, **pending)
         st.rerun()
     except Exception as exc:
+        _clear_pending_analysis_state()
         st.exception(exc)
         return
-    st.session_state.pop("pending_model_analysis", None)
-    st.session_state.pop("pending_rerun", None)
+    _clear_pending_analysis_state()
     st.rerun()
 
 
 def _render_model_decision(db_path: Path) -> bool:
-    pending = st.session_state.get("pending_model_analysis")
+    pending = st.session_state.get(_PENDING_MODEL_ANALYSIS_KEY)
     if not pending:
         return False
 
@@ -193,8 +203,7 @@ def _render_model_decision(db_path: Path) -> bool:
             set_model_download_consent("deny", db_path)
             _resume_pending_model_analysis(db_path, skip_transcription=True)
         if st.button("Cancel analysis", width="stretch"):
-            st.session_state.pop("pending_model_analysis", None)
-            st.session_state.pop("pending_rerun", None)
+            _clear_pending_analysis_state()
             st.rerun()
     return True
 
@@ -229,7 +238,7 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
         try:
             source, prior_runs = find_source_runs(db_path, video_path)
             if prior_runs:
-                st.session_state["pending_rerun"] = {
+                st.session_state[_PENDING_RERUN_KEY] = {
                     "source": source,
                     "runs": prior_runs,
                     "video_path": str(Path(video_path).expanduser().resolve()),
@@ -258,7 +267,7 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
         except Exception as exc:
             st.exception(exc)
 
-    pending = st.session_state.get("pending_rerun")
+    pending = st.session_state.get(_PENDING_RERUN_KEY)
     if not pending:
         return
     runs = pending.get("runs", [])
@@ -273,7 +282,7 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
     r1, r2 = st.columns(2)
     if latest and r1.button("Load latest", width="stretch"):
         st.session_state.analysis_id = latest["id"]
-        st.session_state.pop("pending_rerun", None)
+        st.session_state.pop(_PENDING_RERUN_KEY, None)
         st.rerun()
     if r2.button("Analyze again", type="primary", width="stretch"):
         try:
@@ -286,7 +295,7 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
                 source_info=pending.get("source"),
                 reuse_features=not force_fresh,
             )
-            st.session_state.pop("pending_rerun", None)
+            st.session_state.pop(_PENDING_RERUN_KEY, None)
             st.rerun()
         except ModelDecisionRequired as exc:
             _queue_model_decision(
@@ -384,7 +393,7 @@ def _render_review(db_path: Path) -> None:
         mining_profile = detect_weight_preset(dict(analysis.get("settings", {}).get("weights") or {}))
     learning_run = dict(analysis.get("cache", {}).get("learning") or {})
     transcription = analysis.get("transcription", {})
-    transcription_skipped = transcription.get("status") == "skipped"
+    transcription_skipped = is_transcription_skipped(transcription)
 
     st.subheader("📊 Analysis overview")
     c1, c2, c3, c4, c5 = st.columns(5)
