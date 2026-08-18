@@ -136,3 +136,15 @@ def test_strict_prepare_still_blocks_denied_uncached_model() -> None:
             ModelAccessPreferences("deny", None),
             download_model_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError()),
         )
+
+
+def test_cache_probe_does_not_hide_unexpected_errors() -> None:
+    def unreadable_cache(*_args, **_kwargs) -> str:
+        raise PermissionError("cache unreadable")
+
+    with pytest.raises(PermissionError, match="cache unreadable"):
+        resolve_model_reference(
+            Settings(whisper_model="large-v3"),
+            ModelAccessPreferences("unset", None),
+            download_model_fn=unreadable_cache,
+        )
