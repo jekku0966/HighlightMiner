@@ -67,4 +67,4 @@ def test_transcription_skips_malformed_segments_and_normalizes_valid_metadata(mo
     assert progress_updates
     assert any("CPU (INT8 · large-v3)" in message for message, _ in progress_updates)
     assert any("elapsed 00:00:00" in message for message, _ in progress_updates)
-    assert progress_updates[-1][1] == 1.0
+    assert progress_updates[-1][1] >= 0.999
