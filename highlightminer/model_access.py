@@ -71,6 +71,15 @@ def huggingface_cache_directory() -> Path:
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
+def _local_entry_not_found_error() -> type[Exception]:
+    """Resolve Hugging Face's offline cache-miss type across supported versions."""
+    try:
+        from huggingface_hub.errors import LocalEntryNotFoundError
+    except ImportError:  # Older huggingface_hub exposed it from utils.
+        from huggingface_hub.utils import LocalEntryNotFoundError
+    return LocalEntryNotFoundError
+
+
 def _normalize_local_model_path(path: str | Path | None) -> str | None:
     raw = "" if path is None else str(path).strip()
     if not raw:
@@ -211,9 +220,10 @@ def resolve_model_reference(
 
         download_model_fn = download_model
 
+    cache_miss_types = (_local_entry_not_found_error(), FileNotFoundError)
     try:
         cached_path = download_model_fn(settings.whisper_model, local_files_only=True)
-    except Exception:
+    except cache_miss_types:
         cached_path = None
     if cached_path:
         return PreparedModelReference(
