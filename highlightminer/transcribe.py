@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 import re
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,10 @@ _PROFANITY = {
     "vittu", "saatana", "perkele", "jumalauta", "helvetti",
 }
 
+TranscriptionProgress = Callable[[str, float], None]
+_PROGRESS_REPORT_INTERVAL_SECONDS = 1.0
+_PROGRESS_REPORT_FRACTION_DELTA = 0.005
+
 
 def _safe_float(value: Any) -> float | None:
     try:
@@ -27,6 +33,31 @@ def _safe_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed is not None and math.isfinite(parsed) else None
+
+
+def _format_elapsed(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _compute_label(compute_type: str) -> str:
+    labels = {
+        "float16": "FP16",
+        "float32": "FP32",
+        "int8": "INT8",
+        "int8_float16": "INT8/FP16",
+        "int8_float32": "INT8/FP32",
+        "int16": "INT16",
+    }
+    return labels.get(compute_type, compute_type.upper())
+
+
+def _runtime_label(device: str, compute_type: str, model_name: str) -> str:
+    if device == "cuda":
+        return f"GPU (CUDA · {_compute_label(compute_type)} · {model_name})"
+    return f"CPU ({_compute_label(compute_type)} · {model_name})"
 
 
 def resolve_device(settings: Settings) -> tuple[str, str]:
@@ -93,11 +124,15 @@ def transcribe_audio(
     settings: Settings,
     model_access: ModelAccessPreferences | None = None,
     prepared_model: PreparedModelReference | None = None,
+    *,
+    audio_duration: float | None = None,
+    progress: TranscriptionProgress | None = None,
 ) -> tuple[list[dict], dict]:
     # On Windows this explicitly exposes the configured portable CUDA/cuDNN DLL directory.
     configure_windows_cuda_dll_search()
     from faster_whisper import WhisperModel
 
+    started_at = time.perf_counter()
     prepared = prepared_model or prepare_model_reference(
         settings,
         model_access or ModelAccessPreferences(),
@@ -107,6 +142,16 @@ def transcribe_audio(
     model_kwargs = {
         "local_files_only": prepared.local_files_only,
     }
+
+    def report(message: str, fraction: float) -> None:
+        if progress is not None:
+            progress(message, clamp(fraction))
+
+    report(
+        f"Loading faster-whisper model — {_runtime_label(device, compute_type, prepared.display_name)} · "
+        f"elapsed {_format_elapsed(time.perf_counter() - started_at)}",
+        0.0,
+    )
     try:
         model = WhisperModel(prepared.reference, device=device, compute_type=compute_type, **model_kwargs)
     except Exception as exc:
@@ -114,6 +159,11 @@ def transcribe_audio(
             raise
         fallback_reason = f"CUDA initialization failed: {type(exc).__name__}: {exc}"
         device, compute_type = "cpu", "int8"
+        report(
+            f"CUDA initialization failed; retrying on {_runtime_label(device, compute_type, prepared.display_name)} · "
+            f"elapsed {_format_elapsed(time.perf_counter() - started_at)}",
+            0.0,
+        )
         model = WhisperModel(prepared.reference, device=device, compute_type=compute_type, **model_kwargs)
 
     kwargs = {
@@ -126,9 +176,39 @@ def transcribe_audio(
 
     segments, info = model.transcribe(str(audio_path), **kwargs)
     rows: list[dict] = []
+    duration = max(0.0, float(audio_duration or 0.0))
+    last_report_at = started_at
+    last_fraction = -1.0
+    furthest_audio_second = 0.0
+
+    def report_transcription(*, force: bool = False) -> None:
+        nonlocal last_report_at, last_fraction
+        now = time.perf_counter()
+        fraction = clamp(furthest_audio_second / duration) if duration > 0 else 0.0
+        if (
+            not force
+            and (now - last_report_at) < _PROGRESS_REPORT_INTERVAL_SECONDS
+            and (fraction - last_fraction) < _PROGRESS_REPORT_FRACTION_DELTA
+        ):
+            return
+        audio_text = ""
+        if duration > 0:
+            audio_text = f" · {_format_elapsed(furthest_audio_second)} / {_format_elapsed(duration)} audio"
+        report(
+            f"Transcribing — {_runtime_label(device, compute_type, prepared.display_name)}"
+            f"{audio_text} · elapsed {_format_elapsed(now - started_at)}",
+            fraction,
+        )
+        last_report_at = now
+        last_fraction = fraction
+
+    report_transcription(force=True)
     for seg in segments:
         start = _safe_float(getattr(seg, "start", None))
         end = _safe_float(getattr(seg, "end", None))
+        if end is not None:
+            furthest_audio_second = max(furthest_audio_second, max(0.0, end))
+            report_transcription()
         raw_text = getattr(seg, "text", "")
         text = "" if raw_text is None else str(raw_text).strip()
         if start is None or end is None or not text:
@@ -145,6 +225,11 @@ def transcribe_audio(
             "reasons": reasons,
         })
 
+    elapsed_seconds = max(0.0, time.perf_counter() - started_at)
+    if duration > 0:
+        furthest_audio_second = max(furthest_audio_second, duration)
+    report_transcription(force=True)
+
     language_probability = _safe_float(getattr(info, "language_probability", None))
     metadata = {
         "status": TRANSCRIPTION_AVAILABLE,
@@ -155,5 +240,8 @@ def transcribe_audio(
         "model": prepared.display_name,
         "model_source": prepared.source,
         "fallback_reason": fallback_reason,
+        "elapsed_seconds": round(elapsed_seconds, 3),
+        "audio_duration_seconds": round(duration, 3) if duration > 0 else None,
+        "real_time_factor": round(elapsed_seconds / duration, 6) if duration > 0 else None,
     }
     return rows, metadata
