@@ -35,6 +35,7 @@ from .storage import (
     load_analysis,
     record_export,
 )
+from .transcription_status import transcription_status
 
 _STREAMLIT_CHILD_ARG = "__streamlit_child__"
 _DESKTOP_PROBE_ARG = "__desktop_probe__"
@@ -73,8 +74,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     print(f"Source run: {analysis.get('run_number', 1)}")
     reused = analysis.get("cache", {}).get("reused_stages", [])
     print(f"Reused stages: {', '.join(reused) if reused else 'none'}")
-    transcription_status = str(analysis.get("transcription", {}).get("status") or "available")
-    print(f"Speech recognition: {transcription_status}")
+    print(f"Speech recognition: {transcription_status(analysis.get('transcription'))}")
     print(f"Settings: {'JSON override ' + str(Path(args.settings).expanduser().resolve()) if args.settings else 'active database profile'}")
     print(f"Database: {Path(args.db).expanduser().resolve()}")
     return 0
