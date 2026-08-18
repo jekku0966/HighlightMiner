@@ -5,7 +5,7 @@
 > Development branch: `v0.2-dev` — version `0.2.0.dev0`  
 > Stable/simple v0.1.x remains on `main`.
 
-HighlightMiner analyzes long VODs using audio excitement, local Whisper transcription, reaction-heavy speech cues, and optional chat bursts, then presents ranked candidate moments for human review.
+HighlightMiner analyzes long VODs using audio excitement, optional local Whisper transcription, reaction-heavy speech cues when transcription is available, and optional chat bursts, then presents ranked candidate moments for human review.
 
 ## Windows desktop UI
 
@@ -53,9 +53,11 @@ Use **⚙️ Settings** in the sidebar instead of hand-editing JSON. The page pr
 - editable reaction phrases;
 - **Save settings**, **Reset defaults**, **Import settings**, and **Export settings**.
 
-HighlightMiner never silently opts the user into downloading a speech-recognition model. A fresh database asks **Allow model downloads** or **No model downloads**. The decision is stored locally in SQLite and can be changed later. Users can also point HighlightMiner at a manually downloaded local CTranslate2 Whisper model folder; local model selection works without granting download permission. Imported settings files cannot grant model-download consent.
+HighlightMiner never silently opts the user into downloading a speech-recognition model. A fresh database starts at **Ask before any download**, but the app does not interrupt startup. When a new analysis actually needs a fresh transcript, HighlightMiner first tries a manually selected local model and an already cached model without networking. Only if neither is available does the Mine page ask the user to **Download model**, **Choose local model**, or **Continue without speech**.
 
-Signal presets are **Balanced**, **Reaction-heavy**, **Chat-heavy**, and **Audio-heavy**. Presets alter weights only; they never secretly change Whisper, thresholds, or clip timing. Manual weighting becomes **Custom**. If chat is absent, its weight becomes zero and audio/transcript are renormalized automatically.
+Choosing **Continue without speech** remembers **Never download models** in SQLite and completes the analysis with audio plus optional chat instead of making the rest of the app unusable. The preference can be changed later under **Settings → Analysis engine → Model access**. Imported settings files cannot grant model-download permission. A manually selected CTranslate2 Whisper model works without granting download permission.
+
+Signal presets are **Balanced**, **Reaction-heavy**, **Chat-heavy**, and **Audio-heavy**. Presets alter weights only; they never secretly change Whisper, thresholds, or clip timing. Manual weighting becomes **Custom**. Unavailable signals receive zero effective weight and the remaining signals are renormalized automatically. If every configured weight for the remaining signals was zero, HighlightMiner falls back to equal weighting across the signals that actually exist.
 
 On the first database-backed settings load, HighlightMiner imports the local/package `settings.json` once so existing defaults/reaction phrases survive migration. SQLite is authoritative after that. JSON remains available for backup, sharing, and explicit import/export.
 
@@ -78,9 +80,20 @@ A sampled content fingerprint recognizes a byte-identical VOD without relying on
 
 Candidate ranking always runs again. Compatible audio features, Whisper transcript, and chat features are reused independently. Changing only scoring settings can therefore reduce a rerun to a quick rerank. Changing reaction phrases reuses compatible Whisper text and rescoring does not require retranscription.
 
+A run that deliberately skips speech recognition records that status but does **not** save the empty transcript under the normal Whisper cache signature. That prevents a no-transcript run from shadowing an older valid reusable transcript.
+
 ```powershell
 HighlightMiner.exe analyze "D:\VODs\stream.mp4" --no-reuse
 ```
+
+The CLI is non-interactive for model consent. For a missing model, explicitly choose one of these per-command modes:
+
+```powershell
+HighlightMiner.exe analyze "D:\VODs\stream.mp4" --allow-model-download
+HighlightMiner.exe analyze "D:\VODs\stream.mp4" --no-transcription
+```
+
+These flags do not silently change the normal desktop download preference.
 
 See `RERUNS_AND_LEARNING.md` for source identity/cache rules.
 
@@ -94,13 +107,13 @@ Review semantics are explicit:
 | Reject | `0` negative |
 | Unreviewed | unlabeled |
 
-Unreviewed is **not** silently treated as Reject. Candidate feature snapshots, original ranking scores, content/game labels, run/source IDs, settings snapshots, review changes, timing edits, titles, and exports are retained for the future preference reranker.
+Unreviewed is **not** silently treated as Reject. Candidate feature snapshots, original ranking scores, content/game labels, run/source IDs, settings snapshots, review changes, timing edits, titles, exports, signal availability, and effective scoring weights are retained for future preference-learning experiments.
 
 ```powershell
 HighlightMiner.exe learning-stats
 ```
 
-The dataset plumbing exists; the actual personal preference learner is not implemented yet.
+The dataset plumbing exists; the actual personal preference learner is not implemented on this branch.
 
 ## Review and export
 
@@ -121,7 +134,7 @@ Use **Import v0.1 analysis.json** in the sidebar. HighlightMiner migrates the an
 
 ## Security posture
 
-The dev branch includes local-file validation, automatic UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, explicit model-download consent, local-only manual model selection, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, validation-only public Windows CI, and SHA-256/manifest provenance for official release assets.
+The dev branch includes local-file validation, automatic UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, just-in-time model-download consent, local-only cached/manual model loading, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, validation-only public Windows CI, and SHA-256/manifest provenance for official release assets.
 
 The sampled VOD fingerprint is for source identity, not security/integrity verification. See `SECURITY.md`.
 
@@ -155,7 +168,7 @@ Tests:
 
 ## Documentation
 
-- `SETTINGS.md` — in-app settings, presets, import/export
+- `SETTINGS.md` — in-app settings, model access, presets, import/export
 - `V0.2_DEV.md` — architecture/status
 - `RERUNS_AND_LEARNING.md` — rerun/cache/learning contract
 - `BUILD_WINDOWS.md` — Windows build/package notes

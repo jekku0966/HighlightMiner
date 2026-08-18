@@ -6,14 +6,34 @@ import streamlit as st
 
 from .categorization import normalize_content_label
 from .export import create_preview_clip, export_clip
+from .model_access import (
+    ModelAccessPreferences,
+    ModelDecisionRequired,
+    huggingface_cache_directory,
+    load_model_access,
+    models_root,
+    save_model_access,
+    set_model_download_consent,
+    validate_local_model_directory,
+)
 from .pipeline import analyze_vod
 from .review import load_review, save_review
 from .security import validate_local_video
 from .settings_presets import detect_weight_preset, normalize_weights
 from .settings_store import load_app_settings
 from .storage import find_source_runs, import_legacy_analysis, learning_summary, list_analyses, load_analysis, record_export
-from .ui_common import _CHAT_FILTER, _JSON_FILTER, _VIDEO_FILTER, default_work_dir, path_picker, render_shutdown
+from .transcription_status import is_transcription_skipped
+from .ui_common import _CHAT_FILTER, _JSON_FILTER, _VIDEO_FILTER, choose_folder, default_work_dir, path_picker, render_shutdown
 from .util import format_time
+
+_PENDING_MODEL_ANALYSIS_KEY = "pending_model_analysis"
+_PENDING_RERUN_KEY = "pending_rerun"
+
+
+def _clear_pending_analysis_state() -> None:
+    """Clear transient state for an analysis attempt without unloading history."""
+    st.session_state.pop(_PENDING_MODEL_ANALYSIS_KEY, None)
+    st.session_state.pop(_PENDING_RERUN_KEY, None)
 
 
 def _candidate_rows(analysis: dict, review: dict) -> list[dict]:
@@ -37,7 +57,18 @@ def _history_label(row: dict) -> str:
     return f"{row['content_label']} · {row['video_name']} · run {row.get('run_number', 1)} · {created} · {row['candidates']} candidates · {row['kept']} kept"
 
 
-def _run_analysis_ui(*, db_path: Path, video_path: str, chat_path: str, content_label: str, work_dir: str, source_info: dict | None = None, reuse_features: bool = True) -> str:
+def _run_analysis_ui(
+    *,
+    db_path: Path,
+    video_path: str,
+    chat_path: str,
+    content_label: str,
+    work_dir: str,
+    source_info: dict | None = None,
+    reuse_features: bool = True,
+    allow_model_download: bool = False,
+    skip_transcription: bool = False,
+) -> str:
     settings = load_app_settings(db_path)
     status = st.status("Analyzing…", expanded=True)
     bar = st.progress(0.0)
@@ -57,12 +88,99 @@ def _run_analysis_ui(*, db_path: Path, video_path: str, chat_path: str, content_
         db_path=db_path,
         source_info=source_info,
         reuse_features=reuse_features,
+        allow_model_download=allow_model_download,
+        skip_transcription=skip_transcription,
     )
     analysis = load_analysis(db_path, analysis_id)
     reused = analysis.get("cache", {}).get("reused_stages", [])
-    st.session_state["analysis_notice"] = ("Reused cached " + ", ".join(reused) + ".") if reused else "Fresh source features generated."
+    if is_transcription_skipped(analysis.get("transcription")):
+        st.session_state["analysis_notice"] = (
+            "Speech recognition was skipped. This run used audio"
+            + (" and chat" if analysis.get("chat", {}).get("path") else "")
+            + " signals only."
+        )
+    else:
+        st.session_state["analysis_notice"] = ("Reused cached " + ", ".join(reused) + ".") if reused else "Fresh source features generated."
     status.update(label="Analysis complete", state="complete", expanded=False)
     return analysis_id
+
+
+def _queue_model_decision(exc: ModelDecisionRequired, **analysis_args) -> None:
+    st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = {
+        **analysis_args,
+        "message": str(exc),
+    }
+
+
+def _resume_pending_model_analysis(
+    db_path: Path,
+    *,
+    allow_model_download: bool = False,
+    skip_transcription: bool = False,
+) -> None:
+    pending = dict(st.session_state.get(_PENDING_MODEL_ANALYSIS_KEY) or {})
+    if not pending:
+        return
+    pending.pop("message", None)
+    try:
+        st.session_state.analysis_id = _run_analysis_ui(
+            db_path=db_path,
+            allow_model_download=allow_model_download,
+            skip_transcription=skip_transcription,
+            **pending,
+        )
+    except ModelDecisionRequired as exc:
+        _queue_model_decision(exc, **pending)
+        st.rerun()
+    except Exception as exc:
+        _clear_pending_analysis_state()
+        st.exception(exc)
+        return
+    _clear_pending_analysis_state()
+    st.rerun()
+
+
+def _render_model_decision(db_path: Path) -> bool:
+    pending = st.session_state.get(_PENDING_MODEL_ANALYSIS_KEY)
+    if not pending:
+        return False
+
+    settings = load_app_settings(db_path)
+    with st.container(border=True):
+        st.subheader("Speech-recognition model required")
+        st.write(pending.get("message") or f"The model {settings.whisper_model!r} is not installed.")
+        st.caption(
+            "Your VOD stays local. Downloading only retrieves the speech-recognition model from Hugging Face. "
+            f"Downloaded models normally use `{huggingface_cache_directory()}`."
+        )
+        st.caption(
+            "You can choose a complete local CTranslate2 Whisper model, or continue without speech recognition. "
+            "Continuing remembers that model downloads are disabled and renormalizes scoring across the signals that remain available."
+        )
+        download, local, no_speech = st.columns(3)
+        if download.button("Download model", type="primary", width="stretch"):
+            set_model_download_consent("allow", db_path)
+            _resume_pending_model_analysis(db_path, allow_model_download=True)
+        if local.button("Choose local model", width="stretch"):
+            try:
+                selected = choose_folder("Choose a CTranslate2 Whisper model folder", str(models_root()))
+                if selected:
+                    validated = validate_local_model_directory(selected)
+                    current = load_model_access(db_path)
+                    save_model_access(
+                        ModelAccessPreferences(current.download_consent, str(validated)),
+                        db_path,
+                    )
+                    _resume_pending_model_analysis(db_path)
+            except Exception as exc:
+                st.exception(exc)
+        if no_speech.button("Continue without speech", width="stretch"):
+            set_model_download_consent("deny", db_path)
+            _resume_pending_model_analysis(db_path, skip_transcription=True)
+        if st.button("Cancel analysis", width="stretch"):
+            _clear_pending_analysis_state()
+            st.rerun()
+    return True
 
 
 def _render_source_sidebar(db_path: Path) -> tuple[str, str, str, str]:
@@ -87,11 +205,15 @@ def _render_source_sidebar(db_path: Path) -> tuple[str, str, str, str]:
 
 
 def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, content_label: str, work_dir: str) -> None:
+    if _render_model_decision(db_path):
+        return
+
     if st.button("⛏️ Analyze VOD", type="primary", width="stretch"):
+        source = None
         try:
             source, prior_runs = find_source_runs(db_path, video_path)
             if prior_runs:
-                st.session_state["pending_rerun"] = {
+                st.session_state[_PENDING_RERUN_KEY] = {
                     "source": source,
                     "runs": prior_runs,
                     "video_path": str(Path(video_path).expanduser().resolve()),
@@ -106,10 +228,21 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
                 source_info=source,
             )
             st.rerun()
+        except ModelDecisionRequired as exc:
+            _queue_model_decision(
+                exc,
+                video_path=video_path,
+                chat_path=chat_path,
+                content_label=content_label,
+                work_dir=work_dir,
+                source_info=source,
+                reuse_features=True,
+            )
+            st.rerun()
         except Exception as exc:
             st.exception(exc)
 
-    pending = st.session_state.get("pending_rerun")
+    pending = st.session_state.get(_PENDING_RERUN_KEY)
     if not pending:
         return
     runs = pending.get("runs", [])
@@ -124,7 +257,7 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
     r1, r2 = st.columns(2)
     if latest and r1.button("Load latest", width="stretch"):
         st.session_state.analysis_id = latest["id"]
-        st.session_state.pop("pending_rerun", None)
+        st.session_state.pop(_PENDING_RERUN_KEY, None)
         st.rerun()
     if r2.button("Analyze again", type="primary", width="stretch"):
         try:
@@ -137,7 +270,18 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
                 source_info=pending.get("source"),
                 reuse_features=not force_fresh,
             )
-            st.session_state.pop("pending_rerun", None)
+            st.session_state.pop(_PENDING_RERUN_KEY, None)
+            st.rerun()
+        except ModelDecisionRequired as exc:
+            _queue_model_decision(
+                exc,
+                video_path=video_path,
+                chat_path=chat_path,
+                content_label=content_label,
+                work_dir=work_dir,
+                source_info=pending.get("source"),
+                reuse_features=not force_fresh,
+            )
             st.rerun()
         except Exception as exc:
             st.exception(exc)
@@ -191,16 +335,20 @@ def _render_review(db_path: Path) -> None:
     candidates = analysis.get("candidates", [])
     review = load_review(db_path, analysis_id, analysis)
     content_label = normalize_content_label(analysis.get("content_label"))
+    transcription = analysis.get("transcription", {})
+    transcription_skipped = is_transcription_skipped(transcription)
     st.subheader("📊 Analysis overview")
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Candidates", len(candidates))
     c2.metric("Kept", sum(x.get("status") == "keep" for x in review["items"].values()))
     c3.metric("Rejected", sum(x.get("status") == "reject" for x in review["items"].values()))
     c4.metric("Unreviewed", sum(x.get("status") == "unreviewed" for x in review["items"].values()))
-    c5.metric("Whisper language", analysis.get("transcription", {}).get("language") or "?")
+    c5.metric("Speech recognition", "Off" if transcription_skipped else (transcription.get("language") or "On"))
     reused = analysis.get("cache", {}).get("reused_stages", [])
     cache_text = f" · reused: {', '.join(reused)}" if reused else ""
     st.caption(f"Content / Game: **{content_label}** · source run **{analysis.get('run_number', 1)}** · Analysis ID: `{analysis_id[:12]}`{cache_text}")
+    if transcription_skipped:
+        st.info("Speech recognition was disabled for this run. Candidate scoring was renormalized across audio and available chat signals.")
     if not candidates:
         st.warning("No candidates cleared the current threshold. Adjust Settings and analyze again.")
         return
