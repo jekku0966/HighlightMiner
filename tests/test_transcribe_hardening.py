@@ -38,6 +38,7 @@ def test_transcription_skips_malformed_segments_and_normalizes_valid_metadata(mo
     fake_module.WhisperModel = FakeModel
     monkeypatch.setitem(sys.modules, "faster_whisper", fake_module)
 
+    progress_updates: list[tuple[str, float]] = []
     rows, metadata = transcribe_audio(
         "ignored.wav",
         Settings(device="cpu", compute_type="int8"),
@@ -47,6 +48,8 @@ def test_transcription_skips_malformed_segments_and_normalizes_valid_metadata(mo
             source="managed",
             display_name="large-v3",
         ),
+        audio_duration=4.0,
+        progress=lambda message, fraction: progress_updates.append((message, fraction)),
     )
 
     assert [(row["start"], row["end"], row["text"]) for row in rows] == [
@@ -56,3 +59,12 @@ def test_transcription_skips_malformed_segments_and_normalizes_valid_metadata(mo
     assert metadata["language"] == "en"
     assert metadata["language_probability"] == 0.0
     assert metadata["model_source"] == "managed"
+    assert metadata["device"] == "cpu"
+    assert metadata["compute_type"] == "int8"
+    assert metadata["audio_duration_seconds"] == 4.0
+    assert metadata["elapsed_seconds"] >= 0.0
+    assert metadata["real_time_factor"] is not None
+    assert progress_updates
+    assert any("CPU (INT8 · large-v3)" in message for message, _ in progress_updates)
+    assert any("elapsed 00:00:00" in message for message, _ in progress_updates)
+    assert progress_updates[-1][1] == 1.0
