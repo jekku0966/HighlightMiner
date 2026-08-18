@@ -41,7 +41,7 @@ def test_settings_editor_reseeds_when_streamlit_removed_a_widget_key() -> None:
     assert _editor_needs_seed(state) is True
 
 
-def test_advanced_model_editor_only_requires_extra_field_when_selected() -> None:
+def test_advanced_model_selection_does_not_force_full_reseed() -> None:
     state = {
         key: "present"
         for name, key in _EDITOR_KEYS.items()
@@ -49,9 +49,8 @@ def test_advanced_model_editor_only_requires_extra_field_when_selected() -> None
     }
     state[_EDITOR_KEYS["model"]] = _ADVANCED_WHISPER_MODEL
 
-    assert _editor_needs_seed(state) is True
-
-    state[_EDITOR_KEYS["custom_model"]] = "base.en"
+    # The conditional custom-model text box does not exist until this choice is
+    # rendered. Its absence must not reset the model selectbox to SQLite state.
     assert _editor_needs_seed(state) is False
 
 
