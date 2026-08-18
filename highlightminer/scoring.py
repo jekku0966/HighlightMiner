@@ -45,17 +45,26 @@ def build_timeline(
     transcript: list[dict],
     chat_features: list[dict],
     settings: Settings,
+    *,
+    transcript_available: bool = True,
 ) -> list[TimelineSignal]:
     step = max(0.5, min(1.0, settings.audio_hop_sec))
-    weights = settings.normalized_weights(bool(chat_features))
+    weights = settings.normalized_weights(
+        bool(chat_features),
+        transcript_available=transcript_available,
+    )
     timeline: list[TimelineSignal] = []
     t = 0.0
     while t <= duration:
         a = _nearest_feature(audio_features, t)
-        tx = _transcript_at(transcript, t)
+        tx = _transcript_at(transcript, t) if transcript_available else 0.0
         ch = _nearest_feature(chat_features, t) if chat_features else 0.0
         combined = weights.get("audio", 0) * a + weights.get("transcript", 0) * tx + weights.get("chat", 0) * ch
-        active_values = [a, tx] + ([ch] if chat_features else [])
+        active_values = [a]
+        if transcript_available:
+            active_values.append(tx)
+        if chat_features:
+            active_values.append(ch)
         active = sum(v >= 0.68 for v in active_values)
         if active >= 2:
             combined += 0.10
@@ -76,14 +85,26 @@ def find_candidates(
     transcript: list[dict],
     chat_features: list[dict],
     settings: Settings,
+    *,
+    transcript_available: bool = True,
 ) -> list[dict]:
-    timeline = build_timeline(duration, audio_features, transcript, chat_features, settings)
-    weights = settings.normalized_weights(bool(chat_features))
+    timeline = build_timeline(
+        duration,
+        audio_features,
+        transcript,
+        chat_features,
+        settings,
+        transcript_available=transcript_available,
+    )
+    weights = settings.normalized_weights(
+        bool(chat_features),
+        transcript_available=transcript_available,
+    )
     seeds = [
         x for x in timeline
         if x.combined >= settings.min_candidate_score
         or x.audio >= 0.94
-        or x.transcript >= 0.78
+        or (transcript_available and x.transcript >= 0.78)
         or (chat_features and x.chat >= 0.92)
     ]
     if not seeds:
@@ -113,14 +134,14 @@ def find_candidates(
 
         local = [x for x in timeline if start <= x.time <= end]
         max_audio = max((x.audio for x in local), default=0.0)
-        max_tx = max((x.transcript for x in local), default=0.0)
+        max_tx = max((x.transcript for x in local), default=0.0) if transcript_available else 0.0
         max_chat = max((x.chat for x in local), default=0.0)
         avg_top = sorted((x.combined for x in local), reverse=True)[:5]
         top_mean = sum(avg_top) / max(1, len(avg_top))
         score = clamp(0.72 * peak.combined + 0.28 * top_mean)
 
         reasons = []
-        if max_tx >= 0.55:
+        if transcript_available and max_tx >= 0.55:
             reasons.append("reaction-heavy speech")
         if max_audio >= 0.72:
             reasons.append("audio spike")
@@ -129,12 +150,17 @@ def find_candidates(
         if not reasons:
             reasons.append("combined signal spike")
 
-        signal_count = int(max_audio >= 0.68) + int(max_tx >= 0.68) + int(bool(chat_features) and max_chat >= 0.68)
+        signal_count = int(max_audio >= 0.68)
+        if transcript_available:
+            signal_count += int(max_tx >= 0.68)
+        if chat_features:
+            signal_count += int(max_chat >= 0.68)
         features = {
             "candidate_duration": round(end - start, 3),
             "peak_combined": round(float(peak.combined), 4),
             "top5_combined_mean": round(float(top_mean), 4),
             "active_signal_count": signal_count,
+            "has_transcript": bool(transcript_available),
             "has_chat": bool(chat_features),
             "max_audio": round(max_audio, 4),
             "max_transcript": round(max_tx, 4),
@@ -158,7 +184,7 @@ def find_candidates(
             "transcript_score": round(max_tx, 4),
             "chat_score": round(max_chat, 4),
             "reason": ", ".join(reasons),
-            "transcript": _excerpt(transcript, start, end),
+            "transcript": _excerpt(transcript, start, end) if transcript_available else "",
             "features": features,
         })
 
