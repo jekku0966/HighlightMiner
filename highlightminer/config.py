@@ -133,9 +133,15 @@ class Settings:
         transcript_available: bool = True,
     ) -> dict[str, float]:
         weights = dict(self.weights)
-        if not transcript_available:
-            weights["transcript"] = 0.0
-        if not chat_available:
-            weights["chat"] = 0.0
-        total = sum(max(0.0, float(v)) for v in weights.values()) or 1.0
-        return {k: max(0.0, float(v)) / total for k, v in weights.items()}
+        available = {"audio": True, "transcript": transcript_available, "chat": chat_available}
+        for key, is_available in available.items():
+            if not is_available:
+                weights[key] = 0.0
+
+        cleaned = {key: max(0.0, float(value)) for key, value in weights.items()}
+        total = sum(cleaned.values())
+        if total <= 0.0:
+            active = [key for key, is_available in available.items() if is_available]
+            equal = 1.0 / len(active)
+            return {key: equal if key in active else 0.0 for key in weights}
+        return {key: value / total for key, value in cleaned.items()}
