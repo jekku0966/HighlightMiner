@@ -27,6 +27,13 @@ from .storage import (
     save_analysis,
 )
 from .transcribe import score_text, transcribe_audio
+from .transcription_status import (
+    SKIP_REASON_MODEL_DOWNLOADS_DISABLED,
+    SKIP_REASON_USER_REQUESTED,
+    TRANSCRIPTION_AVAILABLE,
+    is_transcription_skipped,
+    skipped_transcription_metadata,
+)
 from .util import ensure_dir
 
 Progress = Callable[[str, float], None]
@@ -145,21 +152,19 @@ def analyze_vod(
     need_audio = audio_features is None
     need_transcript = transcript is None
     prepared_model: PreparedModelReference | None = None
-    transcription_skipped = False
-    skip_reason: str | None = None
 
     if skip_transcription:
         transcript = []
-        transcript_meta = {
-            "status": "skipped",
-            "reason": "user_requested_no_transcription",
-            "model": settings.whisper_model,
-        }
+        transcript_meta = skipped_transcription_metadata(
+            settings.whisper_model,
+            SKIP_REASON_USER_REQUESTED,
+        )
         cache_from.pop("transcript", None)
         need_transcript = False
-        transcription_skipped = True
-        skip_reason = "user requested analysis without speech recognition"
     elif need_transcript:
+        # Resolver semantics are intentional: None means the user explicitly
+        # denied downloads; an undecided policy raises ModelDecisionRequired so
+        # an interactive caller can ask before any network access is permitted.
         prepared_model = resolve_model_reference(
             settings,
             model_access,
@@ -167,15 +172,14 @@ def analyze_vod(
         )
         if prepared_model is None:
             transcript = []
-            transcript_meta = {
-                "status": "skipped",
-                "reason": "model_downloads_disabled",
-                "model": settings.whisper_model,
-            }
+            transcript_meta = skipped_transcription_metadata(
+                settings.whisper_model,
+                SKIP_REASON_MODEL_DOWNLOADS_DISABLED,
+            )
             need_transcript = False
-            transcription_skipped = True
-            skip_reason = "model downloads are disabled and no local/cached model is available"
 
+    transcription_skipped = is_transcription_skipped(transcript_meta)
+    skip_reason = str((transcript_meta or {}).get("reason") or "") if transcription_skipped else None
     need_wav = need_audio or need_transcript
     wav: Path | None = None
 
@@ -221,7 +225,7 @@ def analyze_vod(
         transcript = _rescore_transcript(list(transcript or []), settings)
         transcript_meta = dict(transcript_meta or {})
         if not transcription_skipped:
-            transcript_meta.setdefault("status", "available")
+            transcript_meta.setdefault("status", TRANSCRIPTION_AVAILABLE)
             transcript_meta["reaction_scoring"] = "current-settings"
 
         if chat_path:
@@ -274,7 +278,7 @@ def analyze_vod(
             "candidates": candidates,
         }
         progress("Saving analysis database", 0.96)
-        save_signatures = dict(signatures)
+        save_signatures: dict[str, str | None] = dict(signatures)
         if transcription_skipped:
             # A deliberately empty transcript must never shadow an older valid
             # transcript with the same Whisper signature during future reuse.
