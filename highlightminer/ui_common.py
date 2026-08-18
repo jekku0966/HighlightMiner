@@ -3,18 +3,43 @@ from __future__ import annotations
 import base64
 import os
 import subprocess
+from collections.abc import MutableMapping
 from pathlib import Path
+from typing import Any
 
 import streamlit as st
 
 _VIDEO_FILTER = "Video files|*.mp4;*.mkv;*.mov;*.webm;*.avi;*.m4v;*.ts|All files|*.*"
 _CHAT_FILTER = "Chat files|*.json;*.jsonl;*.ndjson;*.csv|All files|*.*"
 _JSON_FILTER = "JSON files|*.json|All files|*.*"
+_PERSISTED_WIDGET_PREFIX = "_hm_persisted_widget:"
 
 
 def default_work_dir() -> str:
     from .runtime import app_root
     return str(app_root() / "highlightminer_work")
+
+
+def persisted_widget_key(state_key: str) -> str:
+    return f"{_PERSISTED_WIDGET_PREFIX}{state_key}"
+
+
+def hydrate_persistent_widget(
+    state: MutableMapping[str, Any],
+    state_key: str,
+    default: Any = "",
+) -> None:
+    """Restore a widget value after Streamlit cleaned up an unrendered widget key."""
+    backing_key = persisted_widget_key(state_key)
+    if backing_key not in state:
+        state[backing_key] = state.get(state_key, default)
+    if state_key not in state:
+        state[state_key] = state[backing_key]
+
+
+def persist_widget_value(state: MutableMapping[str, Any], state_key: str) -> None:
+    backing_key = persisted_widget_key(state_key)
+    state[backing_key] = state.get(state_key, "")
 
 
 def dialog_initial_directory(value: str | None) -> str:
@@ -94,13 +119,13 @@ def browse_into_state(state_key: str, title: str, *, folder: bool = False, file_
         selected = choose_folder(title, current) if folder else choose_file(title, file_filter, current)
         if selected:
             st.session_state[state_key] = selected
+            persist_widget_value(st.session_state, state_key)
     except Exception as exc:
         st.session_state["native_dialog_error"] = str(exc)
 
 
 def path_picker(label: str, state_key: str, *, default: str = "", placeholder: str | None = None, folder: bool = False, file_filter: str = "All files|*.*") -> str:
-    if state_key not in st.session_state:
-        st.session_state[state_key] = default
+    hydrate_persistent_widget(st.session_state, state_key, default)
     path_col, browse_col = st.columns([4, 1], vertical_alignment="bottom")
     with path_col:
         st.text_input(label, key=state_key, placeholder=placeholder)
@@ -113,6 +138,21 @@ def path_picker(label: str, state_key: str, *, default: str = "", placeholder: s
             args=(state_key, f"Choose {label}"),
             kwargs={"folder": folder, "file_filter": file_filter},
         )
+    persist_widget_value(st.session_state, state_key)
+    return str(st.session_state.get(state_key, ""))
+
+
+def persistent_text_input(
+    label: str,
+    state_key: str,
+    *,
+    default: str = "",
+    placeholder: str | None = None,
+    help: str | None = None,
+) -> str:
+    hydrate_persistent_widget(st.session_state, state_key, default)
+    st.text_input(label, key=state_key, placeholder=placeholder, help=help)
+    persist_widget_value(st.session_state, state_key)
     return str(st.session_state.get(state_key, ""))
 
 
