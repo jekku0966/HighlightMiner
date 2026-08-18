@@ -4,12 +4,15 @@ HighlightMiner is a local-first desktop application. The Streamlit backend is bo
 
 ## v0.2 development hardening
 
-The `v0.2-dev` branch introduces guard rails around untrusted inputs and persistent state:
+The v0.2 branches introduce guard rails around untrusted inputs and persistent state:
 
 - Analysis, transcript, candidate, review, rerun, export history, and the active desktop settings profile are stored in a local SQLite database instead of scattered writable JSON state files.
 - Source VODs and imported legacy analyses must reference regular local files. Automatic UNC/network-path access is rejected.
 - Chat and settings JSON inputs have extension and size limits, and recursive chat JSON has a nesting limit.
 - Standard faster-whisper model names are allowed by default. Arbitrary custom model repositories require explicit opt-in in the Settings UI or `allow_custom_whisper_model=true` in an imported profile.
+- Recognition-model network downloads require an explicit local user decision. HighlightMiner checks configured local and cached models without networking before offering a download.
+- Cached and manually selected recognition models load with local-files-only behavior. Manual model folders must contain the required CTranslate2 model/tokenizer files and cannot use network/UNC paths.
+- Model-download permission is stored separately from ordinary importable/exportable settings, so importing a settings profile cannot grant network-download consent.
 - Numeric settings and scoring weights are range-validated before a settings profile can be used for analysis.
 - GitHub Actions dependencies are pinned to full commit SHAs and the workflow token is read-only.
 - Windows builds validate the Python interpreter used by `.build-venv` instead of silently reusing an unreadable or unsupported environment.
@@ -26,6 +29,8 @@ v0.2 recognizes the same VOD across analysis runs with a sampled SHA-256 fingerp
 **The sampled fingerprint is an identity/deduplication mechanism, not a cryptographic integrity guarantee.** It should not be used to prove that an untrusted media file is authentic. Full SHA-256 remains the mechanism used for release/package integrity, and chat cache identity uses a full hash of the selected chat file.
 
 A recognized source may update the stored current local path for its existing analysis runs. Source selection still passes through normal local-file validation before preview/export.
+
+A deliberately skipped speech-recognition stage is stored as skipped and receives no normal reusable Whisper transcript signature. This avoids an empty no-transcription run shadowing an older valid cached transcript.
 
 ## Embedded desktop UI
 
@@ -50,14 +55,19 @@ If WebView2 or the packaged pywebview backend cannot initialize, HighlightMiner 
 HighlightMiner.exe ui --browser
 ```
 
-## Settings profiles
+## Settings profiles and model access
 
 Normal desktop settings are stored in `highlightminer.db`. `settings.json` remains a migration/interchange format rather than a secrets file.
 
 - The first database settings load may import the trusted local/package `settings.json` so existing defaults and reaction phrases are retained.
 - Explicit JSON imports pass through local-file, extension, size, model, and numeric validation before replacing the active profile.
-- Custom Hugging Face Whisper repositories require an explicit advanced opt-in because selecting one can cause network access and model/data downloads through the normal faster-whisper/Hugging Face stack.
+- Custom Hugging Face Whisper repositories require an explicit advanced opt-in because selecting one can cause model/data downloads through the normal faster-whisper/Hugging Face stack after download permission is granted.
+- Recognition-model download permission and the manually selected local model path are kept in separate SQLite model-access state and are not granted through imported JSON settings.
 - Settings export rejects UNC/network destinations by default.
+
+A fresh model-download policy is **Ask**. The desktop does not contact Hugging Face merely because the application starts. When a fresh transcript actually requires an uncached model, the user can explicitly allow the download, select a local model, or continue without speech recognition. A previously saved **Never download models** choice is honored without repeatedly prompting.
+
+The CLI is non-interactive: an undecided missing model causes a clean refusal unless the user passes `--allow-model-download` or `--no-transcription`. The per-command download flag does not silently modify the saved desktop preference.
 
 Neither SQLite settings nor exported JSON profiles are encrypted. Do not put credentials, API keys, tokens, or other secrets in them.
 
@@ -67,20 +77,23 @@ Neither SQLite settings nor exported JSON profiles are encrypted. Do not put cre
 
 - source VOD fingerprints, paths, and content/game labels;
 - multiple analysis runs for the same VOD;
-- ranked candidate timings, scores, and feature snapshots;
+- ranked candidate timings, scores, feature snapshots, and signal-availability metadata;
 - transcript text from analyzed VODs;
 - Keep/Reject/Unreviewed decisions and edited clip timings;
 - review-event history;
 - exported clip paths and timestamps;
-- the active application settings profile, including reaction phrases and model preferences.
+- the active application settings profile, including reaction phrases;
+- recognition-model access preference and an optional local model path.
 
 The database is SQLite, not encrypted. Anyone who can read the file can inspect it with SQLite tooling. Do not treat it as a secrets store.
 
-## Local executable/DLL trust
+## Local executable/DLL/model trust
 
 HighlightMiner intentionally supports portable executables and DLLs, including FFmpeg and CUDA/cuDNN runtime files. In source mode, the preferred CUDA runtime location is `runtime\cuda`; packaged builds copy the allowlisted CUDA/cuDNN files beside `HighlightMiner.exe`. The older source-root CUDA layout remains a compatibility fallback but is not used as a packaging source.
 
 Anyone who can replace trusted runtime files in the selected CUDA directory or packaged HighlightMiner folder may be able to cause arbitrary native code to run when HighlightMiner starts or invokes that component. Do not run HighlightMiner from a shared or world-writable directory. Obtain FFmpeg/CUDA runtime files from trusted sources and verify upstream checksums/signatures when available.
+
+The same trust rule applies to a manually selected Whisper/CTranslate2 model folder. HighlightMiner validates the expected file structure and local path, but it does not cryptographically certify the origin or contents of an arbitrary user-supplied model. Use models obtained from sources you trust.
 
 ## Official binary provenance
 
@@ -98,7 +111,9 @@ The manifest records what was bundled; it does not independently prove that a th
 
 ## Network behavior
 
-Expected network access includes the first-time faster-whisper model download through the Hugging Face ecosystem, external links deliberately opened by the user, and normal system-managed Evergreen WebView2 update traffic. The local Streamlit/WebView2 connection remains on loopback.
+HighlightMiner does not require a recognition-model network request at application startup. When a fresh transcript requires a model that is not available locally, the desktop asks before permitting a faster-whisper/Hugging Face download. Cached/manual model discovery is performed with local-files-only behavior. If downloads are denied, HighlightMiner can continue mining with audio plus optional chat rather than silently contacting the network.
+
+Other expected network activity includes external links deliberately opened by the user and normal system-managed Evergreen WebView2 update traffic. The local Streamlit/WebView2 connection remains on loopback.
 
 ## CI and release integrity
 
