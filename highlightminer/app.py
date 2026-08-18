@@ -5,6 +5,7 @@ import streamlit as st
 from highlightminer.storage import default_db_path
 from highlightminer.ui_common import render_shutdown
 from highlightminer.ui_mine import render_mine_page
+from highlightminer.ui_model_access import render_model_download_consent
 from highlightminer.ui_settings import render_settings_page
 
 
@@ -18,6 +19,8 @@ def main() -> None:
             "Mine long VODs for the moments worth keeping — audio + Whisper + optional chat, "
             "ranked locally on your machine. v0.2 keeps source-aware history, reviews, and app settings in SQLite."
         )
+
+    render_model_download_consent(db_path)
 
     with st.sidebar:
         st.header("HighlightMiner")

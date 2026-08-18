@@ -12,6 +12,7 @@ from .identity import describe_source, full_file_sha256, stable_signature
 from .learning import rerank_candidates
 from .learning_store import prepare_preference_model
 from .media import extract_analysis_audio, probe_media
+from .model_access import ModelAccessPreferences, load_model_access, model_signature_payload
 from .scoring import find_candidates
 from .security import validate_chat_file, validate_local_video
 from .settings_presets import detect_weight_preset
@@ -32,7 +33,11 @@ def _noop(_: str, __: float) -> None:
     pass
 
 
-def _stage_signatures(settings: Settings, chat_path: str | Path | None) -> dict[str, str]:
+def _stage_signatures(
+    settings: Settings,
+    chat_path: str | Path | None,
+    model_access: ModelAccessPreferences,
+) -> dict[str, str]:
     audio = stable_signature(
         "highlightminer-audio-features-v1",
         {
@@ -46,7 +51,7 @@ def _stage_signatures(settings: Settings, chat_path: str | Path | None) -> dict[
     transcript = stable_signature(
         "highlightminer-whisper-transcript-v1",
         {
-            "model": settings.whisper_model,
+            "model": model_signature_payload(settings, model_access),
             "device": settings.device,
             "compute_type": settings.compute_type,
             "language": settings.language,
@@ -103,13 +108,14 @@ def analyze_vod(
     work = ensure_dir(work_dir)
     normalized_content_label = normalize_content_label(content_label)
     mining_profile = detect_weight_preset(settings.weights)
+    model_access = load_model_access(db_path)
 
     progress("Identifying source VOD", 0.01)
     actual_source = describe_source(video)
     if source_info and source_info.get("fingerprint") == actual_source["fingerprint"]:
         actual_source["fingerprint"] = str(source_info["fingerprint"])
     source = register_source(db_path, actual_source)
-    signatures = _stage_signatures(settings, chat_path)
+    signatures = _stage_signatures(settings, chat_path, model_access)
     cached = (
         load_reusable_features(
             db_path,
@@ -165,7 +171,7 @@ def analyze_vod(
         if need_transcript:
             progress("Transcribing with faster-whisper", 0.32)
             assert wav is not None
-            transcript, transcript_meta = transcribe_audio(wav, settings)
+            transcript, transcript_meta = transcribe_audio(wav, settings, model_access=model_access)
         else:
             progress("Reusing cached Whisper transcript", 0.60)
 

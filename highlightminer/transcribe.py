@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .model_access import ModelAccessPreferences, prepare_model_reference
 from .runtime import configure_windows_cuda_dll_search
 from .util import clamp
 
@@ -86,21 +87,29 @@ def score_text(text: str, reaction_phrases: list[str]) -> tuple[float, list[str]
     return clamp(score), reasons
 
 
-def transcribe_audio(audio_path: str | Path, settings: Settings) -> tuple[list[dict], dict]:
+def transcribe_audio(
+    audio_path: str | Path,
+    settings: Settings,
+    model_access: ModelAccessPreferences | None = None,
+) -> tuple[list[dict], dict]:
     # On Windows this explicitly exposes the configured portable CUDA/cuDNN DLL directory.
     configure_windows_cuda_dll_search()
     from faster_whisper import WhisperModel
 
+    prepared = prepare_model_reference(settings, model_access or ModelAccessPreferences())
     device, compute_type = resolve_device(settings)
     fallback_reason = None
+    model_kwargs = {
+        "local_files_only": prepared.local_files_only,
+    }
     try:
-        model = WhisperModel(settings.whisper_model, device=device, compute_type=compute_type)
+        model = WhisperModel(prepared.reference, device=device, compute_type=compute_type, **model_kwargs)
     except Exception as exc:
         if device != "cuda":
             raise
         fallback_reason = f"CUDA initialization failed: {type(exc).__name__}: {exc}"
         device, compute_type = "cpu", "int8"
-        model = WhisperModel(settings.whisper_model, device=device, compute_type=compute_type)
+        model = WhisperModel(prepared.reference, device=device, compute_type=compute_type, **model_kwargs)
 
     kwargs = {
         "beam_size": int(settings.beam_size),
@@ -137,7 +146,8 @@ def transcribe_audio(audio_path: str | Path, settings: Settings) -> tuple[list[d
         "language_probability": language_probability if language_probability is not None else 0.0,
         "device": device,
         "compute_type": compute_type,
-        "model": settings.whisper_model,
+        "model": prepared.display_name,
+        "model_source": prepared.source,
         "fallback_reason": fallback_reason,
     }
     return rows, metadata

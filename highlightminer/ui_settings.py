@@ -9,6 +9,7 @@ from .runtime import app_root
 from .settings_presets import WEIGHT_PRESETS, detect_weight_preset, normalize_weights
 from .settings_store import export_app_settings, import_app_settings, load_app_settings, reset_app_settings, save_app_settings
 from .ui_common import _JSON_FILTER, choose_save_file, path_picker
+from .ui_model_access import render_model_access_settings
 
 _EDITOR_KEYS = {
     "model": "cfg_model",
@@ -137,9 +138,11 @@ def render_settings_page(db_path: Path) -> None:
     engine, detection, reactions, transfer = st.tabs(["Analysis engine", "Detection & weights", "Reaction phrases", "Import / Export"])
 
     with engine:
+        render_model_access_settings(db_path)
+        st.divider()
         st.selectbox("Whisper model", list(_STANDARD_WHISPER_MODELS) + ["Custom…"], key=_EDITOR_KEYS["model"])
         if st.session_state[_EDITOR_KEYS["model"]] == "Custom…":
-            st.text_input("Custom Hugging Face model", key=_EDITOR_KEYS["custom_model"], help="Advanced opt-in: only use model repositories you trust.")
+            st.text_input("Custom Hugging Face model", key=_EDITOR_KEYS["custom_model"], help="Advanced opt-in: only use model repositories you trust. A network download still requires the separate model-download permission above.")
         c1, c2 = st.columns(2)
         with c1:
             st.selectbox("Device", ["auto", "cuda", "cpu"], key=_EDITOR_KEYS["device"])
@@ -196,7 +199,7 @@ def render_settings_page(db_path: Path) -> None:
         if st.button("Import settings", disabled=not import_path):
             try:
                 import_app_settings(import_path, db_path)
-                _request_reload("Settings imported into the database.")
+                _request_reload("Settings imported into the database. Model download permission and local model selection were not changed.")
                 st.rerun()
             except Exception as exc:
                 st.exception(exc)
@@ -212,7 +215,7 @@ def render_settings_page(db_path: Path) -> None:
         if st.button("Export settings"):
             try:
                 destination = export_app_settings(st.session_state["settings_export_path"], db_path)
-                st.success(f"Exported to {destination}")
+                st.success(f"Exported to {destination}. Model download permission and local model selection are intentionally not exported.")
             except Exception as exc:
                 st.exception(exc)
 
@@ -229,5 +232,5 @@ def render_settings_page(db_path: Path) -> None:
     with s2:
         if st.button("Reset defaults", width="stretch"):
             reset_app_settings(db_path)
-            _request_reload("Settings reset to HighlightMiner defaults.")
+            _request_reload("Settings reset to HighlightMiner defaults. Model download permission and local model selection were left unchanged.")
             st.rerun()
