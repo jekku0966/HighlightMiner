@@ -8,7 +8,7 @@ from typing import Any, Iterable
 
 import numpy as np
 
-MODEL_VERSION = "preference-logreg-v2-context"
+MODEL_VERSION = "preference-logreg-v3-signal-availability"
 MIN_LABELED = 30
 MIN_PER_CLASS = 8
 MIN_SOURCES = 3
@@ -36,6 +36,7 @@ FEATURE_NAMES = (
     "peak_combined",
     "top5_combined_mean",
     "active_signal_fraction",
+    "has_transcript",
     "has_chat",
     "seed_points_log",
     "weight_audio",
@@ -128,6 +129,8 @@ def feature_vector(item: dict[str, Any]) -> np.ndarray:
     Numeric mining weights are model inputs. The human-friendly profile name is
     retained as provenance/diagnostics and is not a categorical shortcut.
     Previous learner output is deliberately ignored to prevent self-training.
+    Legacy examples default to transcript-available because pre-v3 runs always
+    attempted Whisper when producing fresh candidate features.
     """
     features = dict(item.get("features") or {})
     base_score = _safe_float(item.get("base_score", item.get("score", 0.0)))
@@ -137,8 +140,11 @@ def feature_vector(item: dict[str, Any]) -> np.ndarray:
     duration = max(0.0, _safe_float(features.get("candidate_duration", item.get("original_duration", 0.0))))
     peak = _safe_float(features.get("peak_combined", base_score))
     top5 = _safe_float(features.get("top5_combined_mean", base_score))
-    active = min(3.0, max(0.0, _safe_float(features.get("active_signal_count", 0.0)))) / 3.0
+    has_transcript = 1.0 if bool(features.get("has_transcript", True)) else 0.0
     has_chat = 1.0 if bool(features.get("has_chat", chat > 0.0)) else 0.0
+    available_signal_count = 1.0 + has_transcript + has_chat
+    active_count = max(0.0, _safe_float(features.get("active_signal_count", 0.0)))
+    active = min(available_signal_count, active_count) / available_signal_count
     seed_points = max(0.0, _safe_float(features.get("seed_points", 0.0)))
     weight_audio, weight_transcript, weight_chat = _normalized_context_weights(item, features)
 
@@ -152,6 +158,7 @@ def feature_vector(item: dict[str, Any]) -> np.ndarray:
             peak,
             top5,
             active,
+            has_transcript,
             has_chat,
             math.log1p(seed_points),
             weight_audio,
@@ -461,10 +468,14 @@ def rerank_candidates(
         category_applied += int(bool(context["category_adjustment_active"]))
 
         features = dict(candidate.get("features") or {})
-        features["context"] = {
-            "content_label": content_label,
-            "mining_profile": mining_profile or "Custom",
-        }
+        context_features = dict(features.get("context") or {})
+        context_features.update(
+            {
+                "content_label": content_label,
+                "mining_profile": mining_profile or "Custom",
+            }
+        )
+        features["context"] = context_features
         features["learning"] = {
             "model_id": model_id,
             "model_version": model.model_version,
