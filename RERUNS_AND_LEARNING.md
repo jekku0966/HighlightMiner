@@ -27,10 +27,21 @@ A rerun always performs candidate ranking again. Compatible expensive stages can
 
 `reaction_phrases` do not invalidate the Whisper transcript. Cached text is cheaply rescored with the current reaction phrases instead of retranscribing the VOD.
 
+Model-download consent is evaluated **after** compatible transcript reuse. If a matching transcript already exists, HighlightMiner can rerank the VOD without asking for a model download or requiring the model to still be installed.
+
+If a fresh transcript is required but speech recognition is deliberately skipped, the analysis stores `status = skipped` and a reason. The empty transcript is saved with **no Whisper cache signature**, so it cannot shadow an older compatible valid transcript. A later transcript-enabled rerun can still reuse that older valid data.
+
 CLI full-reprocess equivalent:
 
 ```powershell
 HighlightMiner.exe analyze "D:\VODs\stream.mp4" --no-reuse
+```
+
+The non-interactive CLI can explicitly allow a missing model download or skip transcription for one command:
+
+```powershell
+HighlightMiner.exe analyze "D:\VODs\stream.mp4" --allow-model-download
+HighlightMiner.exe analyze "D:\VODs\stream.mp4" --no-transcription
 ```
 
 ## Learning-ready review data
@@ -45,7 +56,9 @@ The review states map to future supervised learning as follows:
 
 **Unreviewed is not treated as Reject.** Not having judged a candidate is not negative preference evidence.
 
-Candidate rows retain the original heuristic rank/score, audio/transcript/chat scores, combined-signal statistics, active-signal count, candidate duration, chat availability, scoring weights, content/game label, source/run IDs, algorithm version, and feature-schema version.
+Candidate rows retain the original heuristic rank/score, audio/transcript/chat scores, combined-signal statistics, active-signal count, candidate duration, transcript/chat availability, effective scoring weights, content/game label, source/run IDs, algorithm version, and feature-schema version.
+
+When a signal is unavailable its effective weight is zero and the remaining signals are renormalized. Recording both availability and effective weights prevents later experiments from confusing “a real transcript produced no reaction score” with “there was no transcript signal in this run.”
 
 The review layer also retains user-adjusted timing, title edits, review timestamps, meaningful review changes in `review_events`, and every export in `exports`. This preserves stronger behavioral signals for later experimentation without retraining Whisper.
 
@@ -69,4 +82,4 @@ Each export is recorded in SQLite.
 
 ## Current status
 
-The **dataset plumbing is implemented; the preference learner itself is not**. The first learner should train on explicit Keep/Reject examples only. Unreviewed data remains available for statistics/calibration, and repeated runs of the same source should be deduplicated or grouped during training so reruns do not accidentally overweight one VOD.
+The **dataset plumbing is implemented; the preference learner itself is not** on `v0.2-dev`. The first learner should train on explicit Keep/Reject examples only. Unreviewed data remains available for statistics/calibration, and repeated runs of the same source should be deduplicated or grouped during training so reruns do not accidentally overweight one VOD.
