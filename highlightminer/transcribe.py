@@ -23,6 +23,8 @@ _PROFANITY = {
 }
 
 TranscriptionProgress = Callable[[str, float], None]
+_PROGRESS_REPORT_INTERVAL_SECONDS = 1.0
+_PROGRESS_REPORT_FRACTION_DELTA = 0.005
 
 
 def _safe_float(value: Any) -> float | None:
@@ -183,7 +185,11 @@ def transcribe_audio(
         nonlocal last_report_at, last_fraction
         now = time.perf_counter()
         fraction = clamp(furthest_audio_second / duration) if duration > 0 else 0.0
-        if not force and (now - last_report_at) < 1.0 and (fraction - last_fraction) < 0.005:
+        if (
+            not force
+            and (now - last_report_at) < _PROGRESS_REPORT_INTERVAL_SECONDS
+            and (fraction - last_fraction) < _PROGRESS_REPORT_FRACTION_DELTA
+        ):
             return
         audio_text = ""
         if duration > 0:
