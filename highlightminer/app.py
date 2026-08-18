@@ -4,13 +4,17 @@ import streamlit as st
 
 from highlightminer.storage import default_db_path
 from highlightminer.ui_common import render_shutdown
-from highlightminer.ui_mine import render_mine_page
+from highlightminer.ui_mine import analysis_is_running, render_mine_page
 from highlightminer.ui_settings import render_settings_page
+
+_NAV_ITEMS = ["⛏️ Mine / Review", "⚙️ Settings"]
+_NAV_KEY = "main_navigation"
 
 
 def main() -> None:
     st.set_page_config(page_title="HighlightMiner", page_icon="⛏️", layout="wide")
     db_path = default_db_path()
+    running = analysis_is_running()
 
     with st.container(border=True):
         st.title("⛏️ HighlightMiner")
@@ -19,9 +23,25 @@ def main() -> None:
             "ranked locally on your machine. v0.2 keeps source-aware history, reviews, and app settings in SQLite."
         )
 
+    if running:
+        # This executes before the navigation widget is instantiated in this run,
+        # so the UI cannot remain visually parked on Settings while work is active.
+        st.session_state[_NAV_KEY] = _NAV_ITEMS[0]
+
     with st.sidebar:
         st.header("HighlightMiner")
-        page = st.radio("Navigate", ["⛏️ Mine / Review", "⚙️ Settings"], label_visibility="collapsed")
+        page = st.radio(
+            "Navigate",
+            _NAV_ITEMS,
+            key=_NAV_KEY,
+            label_visibility="collapsed",
+            disabled=running,
+        )
+        if running:
+            st.caption("🔒 Analysis in progress. Settings are locked until this run finishes or stops with an error/model decision.")
+
+    if running:
+        page = _NAV_ITEMS[0]
 
     if page == "⚙️ Settings":
         with st.sidebar:
