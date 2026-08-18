@@ -10,7 +10,13 @@ from .chat import analyze_chat, load_chat
 from .config import Settings
 from .identity import describe_source, full_file_sha256, stable_signature
 from .media import extract_analysis_audio, probe_media
-from .model_access import ModelAccessPreferences, load_model_access, model_signature_payload
+from .model_access import (
+    ModelAccessPreferences,
+    PreparedModelReference,
+    load_model_access,
+    model_signature_payload,
+    resolve_model_reference,
+)
 from .scoring import find_candidates
 from .security import validate_chat_file, validate_local_video
 from .storage import (
@@ -89,16 +95,15 @@ def analyze_vod(
     *,
     source_info: dict | None = None,
     reuse_features: bool = True,
+    allow_model_download: bool = False,
+    skip_transcription: bool = False,
 ) -> str:
     """Analyze a VOD and persist a new analysis run in SQLite.
 
-    The same physical VOD may have many analysis runs. Compatible transcript,
-    audio, and chat feature stages are reused from prior runs by default; the
-    candidate ranking and review state are always new for each run.
-
-    ``source_info`` is only a UI optimization hint. Source identity is always
-    re-derived from the actual validated VOD before cache lookup so stale UI
-    state cannot attach a different file to the wrong source history.
+    Compatible feature stages are reused from prior runs. A fresh Whisper pass
+    is resolved only when it is actually needed. If model downloads were
+    explicitly denied and no local/cached model exists, analysis continues with
+    audio plus optional chat instead of failing.
     """
     progress = progress or _noop
     video = validate_local_video(video_path)
@@ -109,9 +114,6 @@ def analyze_vod(
     progress("Identifying source VOD", 0.01)
     actual_source = describe_source(video)
     if source_info and source_info.get("fingerprint") == actual_source["fingerprint"]:
-        # Keep the freshly resolved path/size/name while accepting that the UI
-        # already recognized this source. register_source resolves the DB row by
-        # fingerprint either way.
         actual_source["fingerprint"] = str(source_info["fingerprint"])
     source = register_source(db_path, actual_source)
     signatures = _stage_signatures(settings, chat_path, model_access)
@@ -142,6 +144,38 @@ def analyze_vod(
 
     need_audio = audio_features is None
     need_transcript = transcript is None
+    prepared_model: PreparedModelReference | None = None
+    transcription_skipped = False
+    skip_reason: str | None = None
+
+    if skip_transcription:
+        transcript = []
+        transcript_meta = {
+            "status": "skipped",
+            "reason": "user_requested_no_transcription",
+            "model": settings.whisper_model,
+        }
+        cache_from.pop("transcript", None)
+        need_transcript = False
+        transcription_skipped = True
+        skip_reason = "user requested analysis without speech recognition"
+    elif need_transcript:
+        prepared_model = resolve_model_reference(
+            settings,
+            model_access,
+            allow_download_override=allow_model_download,
+        )
+        if prepared_model is None:
+            transcript = []
+            transcript_meta = {
+                "status": "skipped",
+                "reason": "model_downloads_disabled",
+                "model": settings.whisper_model,
+            }
+            need_transcript = False
+            transcription_skipped = True
+            skip_reason = "model downloads are disabled and no local/cached model is available"
+
     need_wav = need_audio or need_transcript
     wav: Path | None = None
 
@@ -157,6 +191,8 @@ def analyze_vod(
             temp_handle.close()
             progress("Extracting 16 kHz analysis audio", 0.10)
             extract_analysis_audio(video, wav)
+        elif transcription_skipped:
+            progress("Speech recognition disabled; using available signals", 0.16)
         else:
             progress("Reusing cached analysis audio features + transcript", 0.16)
 
@@ -170,13 +206,23 @@ def analyze_vod(
         if need_transcript:
             progress("Transcribing with faster-whisper", 0.32)
             assert wav is not None
-            transcript, transcript_meta = transcribe_audio(wav, settings, model_access=model_access)
+            assert prepared_model is not None
+            transcript, transcript_meta = transcribe_audio(
+                wav,
+                settings,
+                model_access=model_access,
+                prepared_model=prepared_model,
+            )
+        elif transcription_skipped:
+            progress("Skipping speech recognition", 0.60)
         else:
             progress("Reusing cached Whisper transcript", 0.60)
 
         transcript = _rescore_transcript(list(transcript or []), settings)
         transcript_meta = dict(transcript_meta or {})
-        transcript_meta["reaction_scoring"] = "current-settings"
+        if not transcription_skipped:
+            transcript_meta.setdefault("status", "available")
+            transcript_meta["reaction_scoring"] = "current-settings"
 
         if chat_path:
             validated_chat = validate_chat_file(chat_path)
@@ -203,6 +249,7 @@ def analyze_vod(
             transcript,
             list(chat_features or []),
             settings,
+            transcript_available=not transcription_skipped,
         )
         for candidate in candidates:
             candidate["content_label"] = normalized_content_label
@@ -210,6 +257,8 @@ def analyze_vod(
             "reused": cache_from,
             "reused_stages": sorted(cache_from),
             "reuse_enabled": bool(reuse_features),
+            "transcription_skipped": transcription_skipped,
+            "transcription_skip_reason": skip_reason,
         }
         analysis = {
             "version": 2,
@@ -225,6 +274,11 @@ def analyze_vod(
             "candidates": candidates,
         }
         progress("Saving analysis database", 0.96)
+        save_signatures = dict(signatures)
+        if transcription_skipped:
+            # A deliberately empty transcript must never shadow an older valid
+            # transcript with the same Whisper signature during future reuse.
+            save_signatures["transcript"] = None
         analysis_id = save_analysis(
             db_path,
             analysis,
@@ -233,11 +287,13 @@ def analyze_vod(
             list(chat_features or []),
             work_dir=work,
             source=source,
-            signatures=signatures,
+            signatures=save_signatures,
             cache_info=cache_info,
         )
         reused = ", ".join(sorted(cache_from))
         suffix = f" · reused {reused}" if reused else ""
+        if transcription_skipped:
+            suffix += " · no transcript"
         progress(f"Done — {len(candidates)} candidates{suffix}", 1.0)
         return analysis_id
     finally:
