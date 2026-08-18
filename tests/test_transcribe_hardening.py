@@ -5,7 +5,7 @@ import sys
 import types
 
 from highlightminer.config import Settings
-from highlightminer.model_access import ModelAccessPreferences
+from highlightminer.model_access import PreparedModelReference
 from highlightminer.transcribe import _safe_float, transcribe_audio
 
 
@@ -41,7 +41,12 @@ def test_transcription_skips_malformed_segments_and_normalizes_valid_metadata(mo
     rows, metadata = transcribe_audio(
         "ignored.wav",
         Settings(device="cpu", compute_type="int8"),
-        model_access=ModelAccessPreferences("allow", None),
+        prepared_model=PreparedModelReference(
+            reference="large-v3",
+            local_files_only=False,
+            source="managed",
+            display_name="large-v3",
+        ),
     )
 
     assert [(row["start"], row["end"], row["text"]) for row in rows] == [
