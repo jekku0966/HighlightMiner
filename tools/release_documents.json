@@ -3,6 +3,7 @@
     "README.md",
     "V0.2_DEV.md",
     "RERUNS_AND_LEARNING.md",
+    "LEARNING.md",
     "SETTINGS.md",
     "BUILD_WINDOWS.md",
     "CUDA_SETUP.md",
@@ -11,7 +12,5 @@
     "CHANGELOG.md",
     "LICENSE"
   ],
-  "optional": [
-    "LEARNING.md"
-  ]
+  "optional": []
 }
