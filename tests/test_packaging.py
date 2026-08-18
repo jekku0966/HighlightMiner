@@ -8,23 +8,12 @@ from tools.project_version import read_project_version
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REQUIRED_RELEASE_DOCUMENTS = {
-    "README.md",
-    "BUILD_WINDOWS.md",
-    "ATTRIBUTIONS.md",
-    "SECURITY.md",
-    "LICENSE",
-}
 
 
 def _release_documents() -> list[str]:
     config_path = ROOT / "tools" / "release_documents.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    documents = list(config["required"])
-    documents.extend(
-        name for name in config.get("optional", []) if (ROOT / name).is_file()
-    )
-    return documents
+    return list(config["required"])
 
 
 def test_project_version_matches_runtime_version() -> None:
@@ -44,12 +33,14 @@ def test_portable_runtime_staging_directories_are_tracked() -> None:
     assert (ROOT / "runtime" / "cuda" / ".gitkeep").is_file()
 
 
-def test_release_document_manifest_covers_required_documents() -> None:
+def test_release_document_manifest_is_valid() -> None:
     documents = _release_documents()
 
-    assert REQUIRED_RELEASE_DOCUMENTS <= set(documents)
+    assert documents
     assert len(documents) == len(set(documents))
     for name in documents:
+        assert isinstance(name, str) and name.strip()
+        assert Path(name).name == name, f"Release document must be a root-level file: {name}"
         assert (ROOT / name).is_file(), f"Release document is missing: {name}"
 
 

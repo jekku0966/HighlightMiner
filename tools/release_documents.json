@@ -11,7 +11,5 @@
     "CHANGELOG.md",
     "LICENSE"
   ],
-  "optional": [
-    "LEARNING.md"
-  ]
+  "optional": []
 }
