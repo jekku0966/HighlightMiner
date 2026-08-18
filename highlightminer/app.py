@@ -6,6 +6,7 @@ from highlightminer.storage import default_db_path
 from highlightminer.ui_common import render_shutdown
 from highlightminer.ui_mine import analysis_is_running, render_mine_page
 from highlightminer.ui_settings import render_settings_page
+from highlightminer.ui_style import apply_shell_style
 
 _NAV_ITEMS = ["⛏️ Mine / Review", "⚙️ Settings"]
 _NAV_KEY = "main_navigation"
@@ -13,6 +14,7 @@ _NAV_KEY = "main_navigation"
 
 def main() -> None:
     st.set_page_config(page_title="HighlightMiner", page_icon="⛏️", layout="wide")
+    apply_shell_style()
     db_path = default_db_path()
     running = analysis_is_running()
 
