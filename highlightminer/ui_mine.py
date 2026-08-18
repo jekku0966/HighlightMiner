@@ -23,11 +23,40 @@ from .settings_presets import detect_weight_preset, normalize_weights
 from .settings_store import load_app_settings
 from .storage import find_source_runs, import_legacy_analysis, learning_summary, list_analyses, load_analysis, record_export
 from .transcription_status import is_transcription_skipped
-from .ui_common import _CHAT_FILTER, _JSON_FILTER, _VIDEO_FILTER, choose_folder, default_work_dir, path_picker, render_shutdown
+from .ui_common import (
+    _CHAT_FILTER,
+    _JSON_FILTER,
+    _VIDEO_FILTER,
+    choose_folder,
+    default_work_dir,
+    path_picker,
+    persistent_text_input,
+    render_shutdown,
+)
 from .util import format_time
 
 _PENDING_MODEL_ANALYSIS_KEY = "pending_model_analysis"
 _PENDING_RERUN_KEY = "pending_rerun"
+_QUEUED_ANALYSIS_KEY = "queued_analysis"
+_ANALYSIS_RUNNING_KEY = "analysis_running"
+
+
+def analysis_is_running() -> bool:
+    """True while this Streamlit session owns a queued analysis run."""
+    return bool(
+        st.session_state.get(_ANALYSIS_RUNNING_KEY)
+        and st.session_state.get(_QUEUED_ANALYSIS_KEY)
+    )
+
+
+def _queue_analysis(**analysis_args) -> None:
+    st.session_state[_QUEUED_ANALYSIS_KEY] = dict(analysis_args)
+    st.session_state[_ANALYSIS_RUNNING_KEY] = True
+
+
+def _clear_queued_analysis_state() -> None:
+    st.session_state.pop(_QUEUED_ANALYSIS_KEY, None)
+    st.session_state.pop(_ANALYSIS_RUNNING_KEY, None)
 
 
 def _clear_pending_analysis_state() -> None:
@@ -105,6 +134,23 @@ def _run_analysis_ui(
     return analysis_id
 
 
+def _run_queued_analysis(db_path: Path) -> None:
+    queued = dict(st.session_state.get(_QUEUED_ANALYSIS_KEY) or {})
+    if not queued:
+        st.session_state.pop(_ANALYSIS_RUNNING_KEY, None)
+        return
+
+    try:
+        st.session_state.analysis_id = _run_analysis_ui(db_path=db_path, **queued)
+    except ModelDecisionRequired as exc:
+        _queue_model_decision(exc, **queued)
+    except Exception as exc:
+        st.session_state["analysis_error"] = f"{type(exc).__name__}: {exc}"
+    finally:
+        _clear_queued_analysis_state()
+    st.rerun()
+
+
 def _queue_model_decision(exc: ModelDecisionRequired, **analysis_args) -> None:
     st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = {
         **analysis_args,
@@ -118,25 +164,17 @@ def _resume_pending_model_analysis(
     allow_model_download: bool = False,
     skip_transcription: bool = False,
 ) -> None:
+    del db_path
     pending = dict(st.session_state.get(_PENDING_MODEL_ANALYSIS_KEY) or {})
     if not pending:
         return
     pending.pop("message", None)
-    try:
-        st.session_state.analysis_id = _run_analysis_ui(
-            db_path=db_path,
-            allow_model_download=allow_model_download,
-            skip_transcription=skip_transcription,
-            **pending,
-        )
-    except ModelDecisionRequired as exc:
-        _queue_model_decision(exc, **pending)
-        st.rerun()
-    except Exception as exc:
-        _clear_pending_analysis_state()
-        st.exception(exc)
-        return
     _clear_pending_analysis_state()
+    _queue_analysis(
+        allow_model_download=allow_model_download,
+        skip_transcription=skip_transcription,
+        **pending,
+    )
     st.rerun()
 
 
@@ -186,10 +224,15 @@ def _render_model_decision(db_path: Path) -> bool:
 def _render_source_sidebar(db_path: Path) -> tuple[str, str, str, str]:
     st.header("🎬 Source")
     st.caption("Choose local files directly. The VOD is read in place and never uploaded.")
-    video_path = path_picker("VOD", "video_path_input", default=st.session_state.get("video_path", ""), placeholder=r"D:\VODs\stream.mp4", file_filter=_VIDEO_FILTER)
-    chat_path = path_picker("Chat file (optional)", "chat_path_input", default=st.session_state.get("chat_path", ""), placeholder="TwitchDownloader JSON / JSONL / CSV", file_filter=_CHAT_FILTER)
-    content_label = st.text_input("Content / Game", key="content_label_input", placeholder="Just Chatting / Overwatch 2 / ...", help="Stored with every candidate for future preference learning.")
-    work_dir = path_picker("Work folder", "work_dir_input", default=st.session_state.get("work_dir", default_work_dir()), folder=True)
+    video_path = path_picker("VOD", "video_path_input", placeholder=r"D:\VODs\stream.mp4", file_filter=_VIDEO_FILTER)
+    chat_path = path_picker("Chat file (optional)", "chat_path_input", placeholder="TwitchDownloader JSON / JSONL / CSV", file_filter=_CHAT_FILTER)
+    content_label = persistent_text_input(
+        "Content / Game",
+        "content_label_input",
+        placeholder="Just Chatting / Overwatch 2 / ...",
+        help="Stored with every candidate for future preference learning.",
+    )
+    work_dir = path_picker("Work folder", "work_dir_input", default=default_work_dir(), folder=True)
 
     settings = load_app_settings(db_path)
     effective = normalize_weights(settings.weights)
@@ -219,18 +262,7 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
                     "video_path": str(Path(video_path).expanduser().resolve()),
                 }
                 st.rerun()
-            st.session_state.analysis_id = _run_analysis_ui(
-                db_path=db_path,
-                video_path=video_path,
-                chat_path=chat_path,
-                content_label=content_label,
-                work_dir=work_dir,
-                source_info=source,
-            )
-            st.rerun()
-        except ModelDecisionRequired as exc:
-            _queue_model_decision(
-                exc,
+            _queue_analysis(
                 video_path=video_path,
                 chat_path=chat_path,
                 content_label=content_label,
@@ -260,31 +292,16 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
         st.session_state.pop(_PENDING_RERUN_KEY, None)
         st.rerun()
     if r2.button("Analyze again", type="primary", width="stretch"):
-        try:
-            st.session_state.analysis_id = _run_analysis_ui(
-                db_path=db_path,
-                video_path=video_path,
-                chat_path=chat_path,
-                content_label=content_label,
-                work_dir=work_dir,
-                source_info=pending.get("source"),
-                reuse_features=not force_fresh,
-            )
-            st.session_state.pop(_PENDING_RERUN_KEY, None)
-            st.rerun()
-        except ModelDecisionRequired as exc:
-            _queue_model_decision(
-                exc,
-                video_path=video_path,
-                chat_path=chat_path,
-                content_label=content_label,
-                work_dir=work_dir,
-                source_info=pending.get("source"),
-                reuse_features=not force_fresh,
-            )
-            st.rerun()
-        except Exception as exc:
-            st.exception(exc)
+        _queue_analysis(
+            video_path=video_path,
+            chat_path=chat_path,
+            content_label=content_label,
+            work_dir=work_dir,
+            source_info=pending.get("source"),
+            reuse_features=not force_fresh,
+        )
+        st.session_state.pop(_PENDING_RERUN_KEY, None)
+        st.rerun()
 
 
 def _render_history_sidebar(db_path: Path) -> None:
@@ -421,6 +438,8 @@ def _render_review(db_path: Path) -> None:
 
 
 def render_mine_page(db_path: Path) -> None:
+    _run_queued_analysis(db_path)
+
     with st.sidebar:
         video_path, chat_path, content_label, work_dir = _render_source_sidebar(db_path)
         _render_analysis_controls(db_path, video_path, chat_path, content_label, work_dir)
@@ -428,6 +447,9 @@ def render_mine_page(db_path: Path) -> None:
         st.caption(f"Database: `{db_path}`")
         render_shutdown()
 
+    error = st.session_state.pop("analysis_error", None)
+    if error:
+        st.error(f"Analysis stopped: {error}")
     notice = st.session_state.pop("analysis_notice", None)
     if notice:
         st.success(notice)
