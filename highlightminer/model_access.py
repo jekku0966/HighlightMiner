@@ -142,9 +142,11 @@ def validate_local_model_directory(path: str | Path) -> Path:
 def model_signature_payload(
     settings: Settings,
     preferences: ModelAccessPreferences,
-) -> dict:
+) -> str | dict:
     if not preferences.local_model_path:
-        return {"source": "managed", "model": settings.whisper_model}
+        # Preserve the pre-consent v0.2 cache key for normal managed models so
+        # this feature does not force a one-time retranscription of old runs.
+        return settings.whisper_model
 
     normalized = _normalize_local_model_path(preferences.local_model_path)
     assert normalized is not None
