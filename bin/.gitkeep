@@ -1,0 +1,1 @@
+# Portable FFmpeg staging directory. Local ffmpeg.exe/ffprobe.exe are ignored by Git.
