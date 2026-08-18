@@ -58,7 +58,11 @@ def _compute_label(compute_type: str) -> str:
 
 
 def _cpu_thread_count() -> int:
-    """Use all detected physical cores except one, keeping the desktop responsive."""
+    """Reserve one physical core for the desktop; use a capped logical fallback.
+
+    If the physical core count is unavailable, use all detected logical cores
+    except one, capped by ``_CPU_THREAD_FALLBACK_CAP`` to avoid oversubscription.
+    """
     physical = psutil.cpu_count(logical=False)
     if physical is not None and physical > 0:
         return max(1, int(physical) - 1)
@@ -267,7 +271,6 @@ def transcribe_audio(
         "language_probability": language_probability if language_probability is not None else 0.0,
         "device": device,
         "compute_type": compute_type,
-        "cpu_threads": cpu_threads,
         "model": prepared.display_name,
         "model_source": prepared.source,
         "fallback_reason": fallback_reason,
@@ -275,4 +278,6 @@ def transcribe_audio(
         "audio_duration_seconds": round(duration, 3) if duration > 0 else None,
         "real_time_factor": round(elapsed_seconds / duration, 6) if duration > 0 else None,
     }
+    if cpu_threads is not None:
+        metadata["cpu_threads"] = cpu_threads
     return rows, metadata
