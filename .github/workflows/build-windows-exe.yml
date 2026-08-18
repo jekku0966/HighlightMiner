@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Validate Windows EXE
 
 on:
   workflow_dispatch:
@@ -50,11 +50,11 @@ jobs:
           $version = python .\tools\project_version.py
           if ($LASTEXITCODE -ne 0 -or -not $version) { throw "Could not read project version from pyproject.toml." }
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "Packaging HighlightMiner v$version for windows-x64"
+          Write-Host "Validating HighlightMiner v$version for windows-x64"
 
-      - name: Build portable application
+      - name: Build application for validation
         shell: powershell
-        run: .\build_windows.ps1
+        run: .\build_windows.ps1 -SkipZip
 
       - name: Verify bundled Streamlit app and user docs
         shell: powershell
@@ -156,12 +156,11 @@ jobs:
             if (Test-Path $stderrLog) { Get-Content $stderrLog | Out-Host }
           }
 
-      - name: Upload Windows portable ZIP and checksum
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: HighlightMiner-v${{ steps.project.outputs.version }}-windows-x64
-          path: |
-            dist/HighlightMiner-v${{ steps.project.outputs.version }}-windows-x64.zip
-            dist/SHA256SUMS.txt
-          if-no-files-found: error
-          retention-days: 14
+      - name: Confirm validation-only build
+        shell: powershell
+        run: |
+          $zip = ".\dist\HighlightMiner-v${{ steps.project.outputs.version }}-windows-x64.zip"
+          if (Test-Path $zip) {
+            throw "Ordinary CI unexpectedly created a release ZIP: $zip"
+          }
+          Write-Host "Windows packaging validation passed. No compiled release artifact is published from ordinary CI."
