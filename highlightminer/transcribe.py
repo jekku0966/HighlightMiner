@@ -7,6 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import psutil
+
 from .config import Settings
 from .model_access import ModelAccessPreferences, PreparedModelReference, prepare_model_reference
 from .runtime import configure_windows_cuda_dll_search
@@ -25,6 +27,7 @@ _PROFANITY = {
 TranscriptionProgress = Callable[[str, float], None]
 _PROGRESS_REPORT_INTERVAL_SECONDS = 1.0
 _PROGRESS_REPORT_FRACTION_DELTA = 0.005
+_CPU_THREAD_FALLBACK_CAP = 4
 
 
 def _safe_float(value: Any) -> float | None:
@@ -54,9 +57,33 @@ def _compute_label(compute_type: str) -> str:
     return labels.get(compute_type, compute_type.upper())
 
 
-def _runtime_label(device: str, compute_type: str, model_name: str) -> str:
+def _cpu_thread_count() -> int:
+    """Reserve one physical core for the desktop; use a capped logical fallback.
+
+    If the physical core count is unavailable, use all detected logical cores
+    except one, capped by ``_CPU_THREAD_FALLBACK_CAP`` to avoid oversubscription.
+    """
+    physical = psutil.cpu_count(logical=False)
+    if physical is not None and physical > 0:
+        return max(1, int(physical) - 1)
+
+    logical = psutil.cpu_count(logical=True)
+    if logical is None or logical <= 1:
+        return 1
+    return max(1, min(_CPU_THREAD_FALLBACK_CAP, int(logical) - 1))
+
+
+def _runtime_label(
+    device: str,
+    compute_type: str,
+    model_name: str,
+    cpu_threads: int | None = None,
+) -> str:
     if device == "cuda":
         return f"GPU (CUDA · {_compute_label(compute_type)} · {model_name})"
+    if cpu_threads is not None:
+        unit = "thread" if cpu_threads == 1 else "threads"
+        return f"CPU ({_compute_label(compute_type)} · {model_name} · {cpu_threads} {unit})"
     return f"CPU ({_compute_label(compute_type)} · {model_name})"
 
 
@@ -139,16 +166,20 @@ def transcribe_audio(
     )
     device, compute_type = resolve_device(settings)
     fallback_reason = None
-    model_kwargs = {
+    cpu_threads = _cpu_thread_count() if device == "cpu" else None
+    model_kwargs: dict[str, Any] = {
         "local_files_only": prepared.local_files_only,
     }
+    if cpu_threads is not None:
+        model_kwargs["cpu_threads"] = cpu_threads
 
     def report(message: str, fraction: float) -> None:
         if progress is not None:
             progress(message, clamp(fraction))
 
     report(
-        f"Loading faster-whisper model — {_runtime_label(device, compute_type, prepared.display_name)} · "
+        f"Loading faster-whisper model — "
+        f"{_runtime_label(device, compute_type, prepared.display_name, cpu_threads)} · "
         f"elapsed {_format_elapsed(time.perf_counter() - started_at)}",
         0.0,
     )
@@ -159,8 +190,11 @@ def transcribe_audio(
             raise
         fallback_reason = f"CUDA initialization failed: {type(exc).__name__}: {exc}"
         device, compute_type = "cpu", "int8"
+        cpu_threads = _cpu_thread_count()
+        model_kwargs["cpu_threads"] = cpu_threads
         report(
-            f"CUDA initialization failed; retrying on {_runtime_label(device, compute_type, prepared.display_name)} · "
+            f"CUDA initialization failed; retrying on "
+            f"{_runtime_label(device, compute_type, prepared.display_name, cpu_threads)} · "
             f"elapsed {_format_elapsed(time.perf_counter() - started_at)}",
             0.0,
         )
@@ -195,7 +229,7 @@ def transcribe_audio(
         if duration > 0:
             audio_text = f" · {_format_elapsed(furthest_audio_second)} / {_format_elapsed(duration)} audio"
         report(
-            f"Transcribing — {_runtime_label(device, compute_type, prepared.display_name)}"
+            f"Transcribing — {_runtime_label(device, compute_type, prepared.display_name, cpu_threads)}"
             f"{audio_text} · elapsed {_format_elapsed(now - started_at)}",
             fraction,
         )
@@ -244,4 +278,6 @@ def transcribe_audio(
         "audio_duration_seconds": round(duration, 3) if duration > 0 else None,
         "real_time_factor": round(elapsed_seconds / duration, 6) if duration > 0 else None,
     }
+    if cpu_threads is not None:
+        metadata["cpu_threads"] = cpu_threads
     return rows, metadata
