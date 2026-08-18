@@ -27,6 +27,7 @@ highlightminer.db
 highlightminer.db-shm
 highlightminer.db-wal
 highlightminer.db-journal
+models/
 
 # Legacy v0.1 generated data (kept ignored for migration/testing)
 analysis_audio.wav
