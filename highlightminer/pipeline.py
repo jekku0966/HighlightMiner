@@ -35,9 +35,12 @@ from .transcription_status import (
     is_transcription_skipped,
     skipped_transcription_metadata,
 )
-from .util import ensure_dir
+from .util import clamp, ensure_dir
 
 Progress = Callable[[str, float], None]
+
+_TRANSCRIPTION_PROGRESS_START = 0.32
+_TRANSCRIPTION_PROGRESS_END = 0.76
 
 
 def _noop(_: str, __: float) -> None:
@@ -93,7 +96,15 @@ def _rescore_transcript(rows: list[dict], settings: Settings) -> list[dict]:
 
 
 def _elapsed_since(started_at: float) -> float:
+    """Measure rounded elapsed seconds for persisted timing metadata."""
     return round(max(0.0, time.perf_counter() - started_at), 3)
+
+
+def _map_transcription_progress(fraction: float) -> float:
+    """Map Whisper's 0..1 progress into its reserved pipeline progress range."""
+    bounded = clamp(float(fraction))
+    span = _TRANSCRIPTION_PROGRESS_END - _TRANSCRIPTION_PROGRESS_START
+    return _TRANSCRIPTION_PROGRESS_START + (span * bounded)
 
 
 def analyze_vod(
@@ -224,14 +235,13 @@ def analyze_vod(
             progress("Reusing cached audio features", 0.24)
 
         if need_transcript:
-            progress("Preparing faster-whisper transcription", 0.32)
+            progress("Preparing faster-whisper transcription", _TRANSCRIPTION_PROGRESS_START)
             assert wav is not None
             assert prepared_model is not None
             stage_started_at = time.perf_counter()
 
             def transcription_progress(message: str, fraction: float) -> None:
-                bounded = min(1.0, max(0.0, float(fraction)))
-                progress(message, 0.32 + (0.44 * bounded))
+                progress(message, _map_transcription_progress(fraction))
 
             transcript, transcript_meta = transcribe_audio(
                 wav,
@@ -256,7 +266,7 @@ def analyze_vod(
         if chat_path:
             validated_chat = validate_chat_file(chat_path)
             if chat_features is None:
-                progress("Parsing chat", 0.76)
+                progress("Parsing chat", _TRANSCRIPTION_PROGRESS_END)
                 stage_started_at = time.perf_counter()
                 records = load_chat(validated_chat)
                 chat_features = analyze_chat(records, duration)
