@@ -17,6 +17,14 @@ Browser fallback remains available:
 HighlightMiner.exe ui --browser
 ```
 
+## Official Windows binaries
+
+Ordinary GitHub Actions runs build and smoke-test the frozen Windows application for regression coverage, but they do **not** publish a downloadable EXE or ZIP artifact.
+
+Official HighlightMiner Windows binaries are only the assets manually attached by the maintainer to the repository's **GitHub Releases** page. Official releases include a versioned Windows ZIP, `SHA256SUMS.txt`, and `RELEASE_MANIFEST.json`; GitHub provides source-code ZIP/tar.gz archives automatically from the release tag.
+
+Because HighlightMiner is open source, third parties can still build their own executables from the public source. Those builds are not official HighlightMiner binaries unless they are published as release assets by the maintainer.
+
 ## SQLite-backed application state
 
 v0.2 keeps structured state in `highlightminer.db`: analyses, candidates, transcript/audio/chat features, source/run history, Keep/Reject/Unreviewed reviews, timing/title edits, review events, export history, and the active desktop-app settings profile.
@@ -110,7 +118,7 @@ Use **Import v0.1 analysis.json** in the sidebar. HighlightMiner migrates the an
 
 ## Security posture
 
-The dev branch includes local-file validation, automatic UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, and SHA-256 release checksums.
+The dev branch includes local-file validation, automatic UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, validation-only public Windows CI, and SHA-256/manifest provenance for official release assets.
 
 The sampled VOD fingerprint is for source identity, not security/integrity verification. See `SECURITY.md`.
 
