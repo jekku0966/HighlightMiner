@@ -64,3 +64,25 @@ def test_audio_only_analysis_uses_full_available_weight():
 
     assert result
     assert result[0]["features"]["weight_audio"] == 1.0
+
+
+def test_unavailable_preferred_signal_falls_back_to_existing_signals():
+    settings = Settings(
+        min_candidate_score=0.8,
+        weights={"audio": 0.0, "transcript": 1.0, "chat": 0.0},
+        reaction_phrases=[],
+    )
+    audio = [{"time": float(t), "score": 1.0 if t == 10 else 0.0} for t in range(20)]
+
+    result = find_candidates(
+        20,
+        audio,
+        [],
+        [],
+        settings,
+        transcript_available=False,
+    )
+
+    assert result
+    assert result[0]["features"]["weight_audio"] == 1.0
+    assert result[0]["features"]["weight_transcript"] == 0.0
