@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
-from .model_access import ModelAccessPreferences, prepare_model_reference
+from .model_access import ModelAccessPreferences, PreparedModelReference, prepare_model_reference
 from .runtime import configure_windows_cuda_dll_search
 from .util import clamp
 
@@ -91,12 +91,16 @@ def transcribe_audio(
     audio_path: str | Path,
     settings: Settings,
     model_access: ModelAccessPreferences | None = None,
+    prepared_model: PreparedModelReference | None = None,
 ) -> tuple[list[dict], dict]:
     # On Windows this explicitly exposes the configured portable CUDA/cuDNN DLL directory.
     configure_windows_cuda_dll_search()
     from faster_whisper import WhisperModel
 
-    prepared = prepare_model_reference(settings, model_access or ModelAccessPreferences())
+    prepared = prepared_model or prepare_model_reference(
+        settings,
+        model_access or ModelAccessPreferences(),
+    )
     device, compute_type = resolve_device(settings)
     fallback_reason = None
     model_kwargs = {
@@ -142,6 +146,7 @@ def transcribe_audio(
 
     language_probability = _safe_float(getattr(info, "language_probability", None))
     metadata = {
+        "status": "available",
         "language": getattr(info, "language", None),
         "language_probability": language_probability if language_probability is not None else 0.0,
         "device": device,
