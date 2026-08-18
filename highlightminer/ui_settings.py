@@ -47,12 +47,12 @@ def _model_editor_values(settings: Settings) -> tuple[str, str]:
 
 
 def _editor_needs_seed(state: Mapping[str, Any]) -> bool:
+    # Only always-rendered widgets decide whether the editor was cleaned up by
+    # Streamlit. The advanced model-name field is conditional: requiring it here
+    # would snap a freshly selected "Other / advanced…" choice back to the saved
+    # model before the text field has had a chance to render.
     required_names = [name for name in _EDITOR_KEYS if name != "custom_model"]
-    if any(_EDITOR_KEYS[name] not in state for name in required_names):
-        return True
-    if state.get(_EDITOR_KEYS["model"]) == _ADVANCED_WHISPER_MODEL:
-        return _EDITOR_KEYS["custom_model"] not in state
-    return False
+    return any(_EDITOR_KEYS[name] not in state for name in required_names)
 
 
 def _seed_editor(settings: Settings, *, force: bool = False) -> None:
@@ -166,6 +166,8 @@ def render_settings_page(db_path: Path) -> None:
             help="large-v3 is HighlightMiner's default. Turbo is the faster general-purpose option. Use Other / advanced only when you deliberately want a different standard alias or custom Hugging Face model.",
         )
         if st.session_state[_EDITOR_KEYS["model"]] == _ADVANCED_WHISPER_MODEL:
+            if _EDITOR_KEYS["custom_model"] not in st.session_state:
+                st.session_state[_EDITOR_KEYS["custom_model"]] = ""
             st.text_input(
                 "Other model name",
                 key=_EDITOR_KEYS["custom_model"],
