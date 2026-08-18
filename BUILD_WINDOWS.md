@@ -14,7 +14,7 @@ From the repository root in PowerShell:
 .\build_windows.ps1
 ```
 
-The build script reads the version directly from `[project].version` in `pyproject.toml`. Windows packaging is currently validated for **x64** only.
+The build uses `tools\project_version.py` to read and validate `[project].version` from `pyproject.toml`. Windows packaging is currently validated for **x64** only.
 
 ```text
 HighlightMiner-v<version>-windows-x64.zip
@@ -28,18 +28,19 @@ HighlightMiner-v0.2.0.dev0-windows-x64.zip
 
 The script will:
 
-1. Read the project version and verify an x64 build host.
-2. Create/reuse `.build-venv`.
+1. Verify an x64 build host.
+2. Create or reuse `.build-venv`, recreating it when its Python is unreadable or older than 3.10.
 3. Install HighlightMiner, tests, pywebview and PyInstaller.
-4. Run the unit tests.
-5. Build `HighlightMiner.exe` using `HighlightMiner.spec`.
-6. Copy `settings.json` and user-facing documentation into the portable app folder.
-7. Copy local `ffmpeg.exe` / `ffprobe.exe` from the repository root or `./bin` when present.
-8. Copy local CUDA 12 / cuDNN 9 DLLs already placed in the repository root.
-9. Smoke-test `HighlightMiner.exe --help`.
-10. Run the frozen `__desktop_probe__` to verify the packaged pywebview/WinForms/WebView2 Python backend imports.
-11. Run `doctor` when local FFmpeg/CUDA files are complete.
-12. Create the versioned ZIP and `SHA256SUMS.txt`.
+4. Read and validate the project version through the shared TOML-aware helper.
+5. Run the unit tests.
+6. Build `HighlightMiner.exe` using `HighlightMiner.spec`.
+7. Copy `settings.json` and user-facing documentation into the portable app folder.
+8. Copy local `ffmpeg.exe` / `ffprobe.exe` from the repository root or `./bin` when present.
+9. Copy only the documented CUDA 12 / cuDNN 9 DLL allowlist from `runtime\cuda`.
+10. Smoke-test `HighlightMiner.exe --help`.
+11. Run the frozen `__desktop_probe__` to verify the packaged pywebview/WinForms/WebView2 Python backend imports.
+12. Run `doctor` when local FFmpeg/CUDA files are complete.
+13. Create the versioned ZIP and `SHA256SUMS.txt`.
 
 Typical output:
 
@@ -65,6 +66,12 @@ Useful build switches:
 .\build_windows.ps1 -SkipTests
 .\build_windows.ps1 -SkipZip
 ```
+
+## Build-environment validation
+
+The builder requires Python 3.10 or newer. Before reusing `.build-venv`, it reads the interpreter version from `.build-venv\Scripts\python.exe`. If the version cannot be read or is older than Python 3.10, the generated environment is removed and recreated.
+
+When creating a new build environment, the script prefers the Windows `py -3` launcher when it resolves to a compatible interpreter, then falls back to `python` on `PATH`. If neither produces Python 3.10+, the build stops with a clear error instead of creating an unsupported environment.
 
 ## Running the packaged app
 
@@ -141,10 +148,16 @@ The repository does **not** commit FFmpeg, CUDA, or cuDNN binaries. The local bu
 For the currently tested portable layout:
 
 - FFmpeg / ffprobe: place them in the repository root or `./bin` before building.
-- CUDA 12 / cuDNN 9: follow `CUDA_SETUP.md` and extract the DLLs into the repository root before building.
+- CUDA 12 / cuDNN 9: follow `CUDA_SETUP.md` and extract the portable DLLs into `runtime\cuda` before building.
 - WebView2: use the system-installed Evergreen Runtime rather than bundling a fixed Chromium runtime into the ZIP.
 
-The resulting local ZIP will then carry the FFmpeg/CUDA files beside `HighlightMiner.exe`; WebView2 remains a Windows runtime prerequisite.
+The CUDA packager copies an exact allowlist from `runtime\cuda`; it does not scan the repository root for DLL families. The resulting local ZIP carries the selected FFmpeg/CUDA files beside `HighlightMiner.exe`; WebView2 remains a Windows runtime prerequisite.
+
+## Bundle-size policy
+
+`HighlightMiner.spec` deliberately uses PyInstaller's conservative `collect_all` behavior for Streamlit, faster-whisper, CTranslate2 and pywebview. These packages use dynamic imports, native libraries and runtime data that can appear unused during static analysis.
+
+Trim those collections only after clean-machine Windows validation proves the smaller bundle still passes the frozen doctor, desktop/WebView2 startup, CPU transcription and real CUDA transcription. Optimize one package at a time so dependency upgrades can be compared against a known-good package set.
 
 ## GitHub Actions build
 
@@ -159,13 +172,14 @@ CI verifies:
 - frozen pywebview/WinForms/WebView2 backend imports via `__desktop_probe__`;
 - a live HTTP response from the packaged headless Streamlit backend.
 
-CI sets `HIGHLIGHTMINER_UI_MODE=server` for the HTTP smoke test so it does not attempt to create an interactive desktop window on the build runner.
+CI sets `HIGHLIGHTMINER_UI_MODE=server` for the HTTP smoke test so it does not attempt to create an interactive desktop window on the build runner. Its process cleanup is guarded so a failed `Start-Process` cannot mask the original launch error with a null-process cleanup failure.
 
 For licensing/provenance clarity, CI does not automatically download or redistribute external FFmpeg/CUDA/cuDNN binaries. The CI artifact validates the frozen Python application itself; a fully equipped local package is produced by running `build_windows.ps1` where the documented portable runtime files are present.
 
 ## Current build toolchain
 
 - Python 3.13 in GitHub Actions.
+- Local builder: Python 3.10+ with validation/recreation of `.build-venv`.
 - PyInstaller 6.21+.
 - pywebview 6.2.1+ on Windows.
 - UI renderer: Microsoft Edge WebView2 through pywebview's `edgechromium` backend.

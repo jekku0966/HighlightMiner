@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
+from typing import Any
 
 from .config import Settings
 from .runtime import configure_windows_cuda_dll_search
@@ -15,6 +17,14 @@ _PROFANITY = {
     "fuck", "fucking", "shit", "damn", "bitch", "asshole",
     "vittu", "saatana", "perkele", "jumalauta", "helvetti",
 }
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        parsed = float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed is not None and math.isfinite(parsed) else None
 
 
 def resolve_device(settings: Settings) -> tuple[str, str]:
@@ -77,7 +87,7 @@ def score_text(text: str, reaction_phrases: list[str]) -> tuple[float, list[str]
 
 
 def transcribe_audio(audio_path: str | Path, settings: Settings) -> tuple[list[dict], dict]:
-    # On Windows this explicitly exposes CUDA/cuDNN DLLs stored beside run.bat.
+    # On Windows this explicitly exposes the configured portable CUDA/cuDNN DLL directory.
     configure_windows_cuda_dll_search()
     from faster_whisper import WhisperModel
 
@@ -103,18 +113,28 @@ def transcribe_audio(audio_path: str | Path, settings: Settings) -> tuple[list[d
     segments, info = model.transcribe(str(audio_path), **kwargs)
     rows: list[dict] = []
     for seg in segments:
-        score, reasons = score_text(seg.text, settings.reaction_phrases)
+        start = _safe_float(getattr(seg, "start", None))
+        end = _safe_float(getattr(seg, "end", None))
+        raw_text = getattr(seg, "text", "")
+        text = "" if raw_text is None else str(raw_text).strip()
+        if start is None or end is None or not text:
+            continue
+
+        start = max(0.0, start)
+        end = max(start, end)
+        score, reasons = score_text(text, settings.reaction_phrases)
         rows.append({
-            "start": round(float(seg.start), 3),
-            "end": round(float(seg.end), 3),
-            "text": seg.text.strip(),
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "text": text,
             "score": round(score, 4),
             "reasons": reasons,
         })
 
+    language_probability = _safe_float(getattr(info, "language_probability", None))
     metadata = {
         "language": getattr(info, "language", None),
-        "language_probability": float(getattr(info, "language_probability", 0.0) or 0.0),
+        "language_probability": language_probability if language_probability is not None else 0.0,
         "device": device,
         "compute_type": compute_type,
         "model": settings.whisper_model,

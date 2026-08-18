@@ -42,15 +42,35 @@ def project_root() -> Path:
     return app_root()
 
 
-def configure_windows_cuda_dll_search() -> Path:
-    """Make CUDA/cuDNN DLLs placed in the HighlightMiner root discoverable.
+def portable_cuda_core_dlls() -> tuple[str, ...]:
+    """Core DLLs expected from the documented CUDA 12 + cuDNN 9 bundle."""
+    return (
+        "cublas64_12.dll",
+        "cublasLt64_12.dll",
+        "cudnn64_9.dll",
+    )
 
-    HighlightMiner's portable Windows layout keeps the NVIDIA runtime DLLs
-    beside run.bat in source mode and beside HighlightMiner.exe in frozen mode.
-    Python 3.8+ tightened DLL search behavior, so explicitly register that root
-    rather than relying on the current working directory.
+
+def portable_cuda_root() -> Path:
+    """Resolve the local directory that should provide portable CUDA DLLs.
+
+    Source checkouts prefer the dedicated runtime/cuda directory when the core
+    runtime is present there. Existing root-folder source layouts remain a
+    backward-compatible fallback. Frozen builds keep the DLLs beside the EXE.
     """
     root = app_root()
+    if is_frozen():
+        return root
+
+    dedicated = root / "runtime" / "cuda"
+    if all((dedicated / name).is_file() for name in portable_cuda_core_dlls()):
+        return dedicated
+    return root
+
+
+def configure_windows_cuda_dll_search() -> Path:
+    """Make HighlightMiner's selected CUDA/cuDNN directory discoverable."""
+    root = portable_cuda_root()
     if os.name != "nt":
         return root
 
@@ -71,12 +91,3 @@ def configure_windows_cuda_dll_search() -> Path:
             pass
 
     return root
-
-
-def portable_cuda_core_dlls() -> tuple[str, ...]:
-    """Core DLLs expected from the documented CUDA 12 + cuDNN 9 bundle."""
-    return (
-        "cublas64_12.dll",
-        "cublasLt64_12.dll",
-        "cudnn64_9.dll",
-    )

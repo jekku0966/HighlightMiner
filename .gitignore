@@ -51,6 +51,9 @@ bin/ffprobe.exe
 ffmpeg.exe
 ffprobe.exe
 
-# Portable NVIDIA CUDA/cuDNN runtime DLLs placed beside run.bat
+# Portable NVIDIA CUDA/cuDNN runtime DLLs
+runtime/cuda/*.dll
 cublas*.dll
 cudnn*.dll
+nvrtc*.dll
+zlibwapi.dll
