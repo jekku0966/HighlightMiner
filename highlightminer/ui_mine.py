@@ -194,6 +194,7 @@ def _render_model_decision(db_path: Path) -> bool:
             _resume_pending_model_analysis(db_path, skip_transcription=True)
         if st.button("Cancel analysis", width="stretch"):
             st.session_state.pop("pending_model_analysis", None)
+            st.session_state.pop("pending_rerun", None)
             st.rerun()
     return True
 
