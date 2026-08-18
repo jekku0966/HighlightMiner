@@ -287,7 +287,7 @@ def analyze_vod(
         for candidate in candidates:
             candidate["content_label"] = normalized_content_label
 
-        timings["processing_before_database_save_seconds"] = _elapsed_since(pipeline_started_at)
+        timings["pipeline_elapsed_seconds"] = _elapsed_since(pipeline_started_at)
         cache_info = {
             "reused": cache_from,
             "reused_stages": sorted(cache_from),
