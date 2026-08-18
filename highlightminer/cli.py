@@ -21,6 +21,7 @@ from .desktop import (
 )
 from .doctor import run_doctor
 from .export import export_clip
+from .model_access import ModelDecisionRequired
 from .pipeline import analyze_vod
 from .review import load_review
 from .runtime import app_root, bundled_path, is_frozen
@@ -45,21 +46,35 @@ def _progress(message: str, value: float) -> None:
 
 def cmd_analyze(args: argparse.Namespace) -> int:
     settings = Settings.from_file(args.settings) if args.settings else load_app_settings(args.db)
-    analysis_id = analyze_vod(
-        args.video,
-        args.work_dir,
-        settings,
-        args.chat,
-        _progress,
-        content_label=args.content,
-        db_path=args.db,
-        reuse_features=not args.no_reuse,
-    )
+    try:
+        analysis_id = analyze_vod(
+            args.video,
+            args.work_dir,
+            settings,
+            args.chat,
+            _progress,
+            content_label=args.content,
+            db_path=args.db,
+            reuse_features=not args.no_reuse,
+            allow_model_download=bool(args.allow_model_download),
+            skip_transcription=bool(args.no_transcription),
+        )
+    except ModelDecisionRequired as exc:
+        print(f"Cannot start analysis: {exc}", file=sys.stderr)
+        print(
+            "The CLI is non-interactive. Use --allow-model-download for this command, "
+            "use --no-transcription, or choose a local model in the desktop Settings page.",
+            file=sys.stderr,
+        )
+        return 2
+
     analysis = load_analysis(args.db, analysis_id)
     print(f"Analysis ID: {analysis_id}")
     print(f"Source run: {analysis.get('run_number', 1)}")
     reused = analysis.get("cache", {}).get("reused_stages", [])
     print(f"Reused stages: {', '.join(reused) if reused else 'none'}")
+    transcription_status = str(analysis.get("transcription", {}).get("status") or "available")
+    print(f"Speech recognition: {transcription_status}")
     print(f"Settings: {'JSON override ' + str(Path(args.settings).expanduser().resolve()) if args.settings else 'active database profile'}")
     print(f"Database: {Path(args.db).expanduser().resolve()}")
     return 0
@@ -302,6 +317,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     analyze.add_argument("--db", default=default_db, help="SQLite database path")
     analyze.add_argument("--no-reuse", action="store_true", help="Force fresh audio/transcript/chat processing")
+    model_mode = analyze.add_mutually_exclusive_group()
+    model_mode.add_argument(
+        "--allow-model-download",
+        action="store_true",
+        help="Explicitly allow a missing recognition model to download for this command only",
+    )
+    model_mode.add_argument(
+        "--no-transcription",
+        action="store_true",
+        help="Run this analysis without speech recognition even if a transcript/model is available",
+    )
     analyze.set_defaults(func=cmd_analyze)
 
     ui = sub.add_parser("ui", help="Launch the local review UI")
