@@ -99,27 +99,27 @@ def _run_analysis_ui(
     skip_transcription: bool = False,
 ) -> str:
     settings = load_app_settings(db_path)
-    status = st.status("Analyzing…", expanded=True)
-    bar = st.progress(0.0)
-    label = st.empty()
+    with st.status("Analyzing…", expanded=True) as status:
+        label = st.empty()
+        bar = st.progress(0.0)
 
-    def progress(message: str, value: float) -> None:
-        label.write(message)
-        bar.progress(min(1.0, max(0.0, value)))
+        def progress(message: str, value: float) -> None:
+            label.write(message)
+            bar.progress(min(1.0, max(0.0, value)))
 
-    analysis_id = analyze_vod(
-        video_path,
-        work_dir,
-        settings,
-        chat_path or None,
-        progress,
-        content_label=content_label,
-        db_path=db_path,
-        source_info=source_info,
-        reuse_features=reuse_features,
-        allow_model_download=allow_model_download,
-        skip_transcription=skip_transcription,
-    )
+        analysis_id = analyze_vod(
+            video_path,
+            work_dir,
+            settings,
+            chat_path or None,
+            progress,
+            content_label=content_label,
+            db_path=db_path,
+            source_info=source_info,
+            reuse_features=reuse_features,
+            allow_model_download=allow_model_download,
+            skip_transcription=skip_transcription,
+        )
     analysis = load_analysis(db_path, analysis_id)
     reused = analysis.get("cache", {}).get("reused_stages", [])
     if is_transcription_skipped(analysis.get("transcription")):
