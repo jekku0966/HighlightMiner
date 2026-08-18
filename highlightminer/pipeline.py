@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -37,9 +38,12 @@ from .transcription_status import (
     is_transcription_skipped,
     skipped_transcription_metadata,
 )
-from .util import ensure_dir
+from .util import clamp, ensure_dir
 
 Progress = Callable[[str, float], None]
+
+_TRANSCRIPTION_PROGRESS_START = 0.32
+_TRANSCRIPTION_PROGRESS_END = 0.76
 
 
 def _noop(_: str, __: float) -> None:
@@ -92,6 +96,18 @@ def _rescore_transcript(rows: list[dict], settings: Settings) -> list[dict]:
     return rescored
 
 
+def _elapsed_since(started_at: float) -> float:
+    """Measure rounded elapsed seconds for persisted timing metadata."""
+    return round(max(0.0, time.perf_counter() - started_at), 3)
+
+
+def _map_transcription_progress(fraction: float) -> float:
+    """Map Whisper's 0..1 progress into its reserved pipeline progress range."""
+    bounded = clamp(float(fraction))
+    span = _TRANSCRIPTION_PROGRESS_END - _TRANSCRIPTION_PROGRESS_START
+    return _TRANSCRIPTION_PROGRESS_START + (span * bounded)
+
+
 def analyze_vod(
     video_path: str | Path,
     work_dir: str | Path,
@@ -114,12 +130,16 @@ def analyze_vod(
     optional chat. Preference learning remains a conservative fail-open reranker.
     """
     progress = progress or _noop
+    pipeline_started_at = time.perf_counter()
+    timings: dict[str, float] = {}
+
     video = validate_local_video(video_path)
     work = ensure_dir(work_dir)
     normalized_content_label = normalize_content_label(content_label)
     mining_profile = detect_weight_preset(settings.weights)
     model_access = load_model_access(db_path)
 
+    source_started_at = time.perf_counter()
     progress("Identifying source VOD", 0.01)
     actual_source = describe_source(video)
     if source_info and source_info.get("fingerprint") == actual_source["fingerprint"]:
@@ -137,9 +157,12 @@ def analyze_vod(
         if reuse_features
         else {"audio": None, "transcript": None, "transcription": None, "chat": None, "chat_info": None, "from": {}}
     )
+    timings["source_setup_seconds"] = _elapsed_since(source_started_at)
 
+    probe_started_at = time.perf_counter()
     progress("Probing media", 0.03)
     media = probe_media(video)
+    timings["media_probe_seconds"] = _elapsed_since(probe_started_at)
     duration = float(media["duration"])
     if duration <= 0:
         raise ValueError("The VOD duration reported by ffprobe is invalid.")
@@ -196,7 +219,9 @@ def analyze_vod(
             wav = Path(temp_handle.name)
             temp_handle.close()
             progress("Extracting 16 kHz analysis audio", 0.10)
+            stage_started_at = time.perf_counter()
             extract_analysis_audio(video, wav)
+            timings["audio_extract_seconds"] = _elapsed_since(stage_started_at)
         elif transcription_skipped:
             progress("Speech recognition disabled; using available signals", 0.16)
         else:
@@ -205,20 +230,30 @@ def analyze_vod(
         if need_audio:
             progress("Analyzing audio energy", 0.20)
             assert wav is not None
+            stage_started_at = time.perf_counter()
             audio_features = analyze_audio(wav, settings.audio_window_sec, settings.audio_hop_sec)
+            timings["audio_analysis_seconds"] = _elapsed_since(stage_started_at)
         else:
             progress("Reusing cached audio features", 0.24)
 
         if need_transcript:
-            progress("Transcribing with faster-whisper", 0.32)
+            progress("Preparing faster-whisper transcription", _TRANSCRIPTION_PROGRESS_START)
             assert wav is not None
             assert prepared_model is not None
+            stage_started_at = time.perf_counter()
+
+            def transcription_progress(message: str, fraction: float) -> None:
+                progress(message, _map_transcription_progress(fraction))
+
             transcript, transcript_meta = transcribe_audio(
                 wav,
                 settings,
                 model_access=model_access,
                 prepared_model=prepared_model,
+                audio_duration=duration,
+                progress=transcription_progress,
             )
+            timings["transcription_seconds"] = _elapsed_since(stage_started_at)
         elif transcription_skipped:
             progress("Skipping speech recognition", 0.60)
         else:
@@ -233,9 +268,11 @@ def analyze_vod(
         if chat_path:
             validated_chat = validate_chat_file(chat_path)
             if chat_features is None:
-                progress("Parsing chat", 0.76)
+                progress("Parsing chat", _TRANSCRIPTION_PROGRESS_END)
+                stage_started_at = time.perf_counter()
                 records = load_chat(validated_chat)
                 chat_features = analyze_chat(records, duration)
+                timings["chat_analysis_seconds"] = _elapsed_since(stage_started_at)
                 chat_info = {"path": str(validated_chat), "messages": len(records)}
             else:
                 progress("Reusing cached chat features", 0.78)
@@ -246,6 +283,7 @@ def analyze_vod(
             chat_info = {"path": None, "messages": 0}
 
         progress("Ranking candidate moments", 0.86)
+        stage_started_at = time.perf_counter()
         candidates = find_candidates(
             duration,
             list(audio_features or []),
@@ -254,6 +292,7 @@ def analyze_vod(
             settings,
             transcript_available=not transcription_skipped,
         )
+        timings["candidate_ranking_seconds"] = _elapsed_since(stage_started_at)
         for candidate in candidates:
             candidate["content_label"] = normalized_content_label
             features = dict(candidate.get("features") or {})
@@ -271,6 +310,7 @@ def analyze_vod(
             "content_label": normalized_content_label,
             "mining_profile": mining_profile,
         }
+        stage_started_at = time.perf_counter()
         try:
             progress("Applying personal reranker", 0.92)
             prepared_learning = prepare_preference_model(db_path)
@@ -296,7 +336,10 @@ def analyze_vod(
                 "content_label": normalized_content_label,
                 "mining_profile": mining_profile,
             }
+        finally:
+            timings["personal_rerank_seconds"] = _elapsed_since(stage_started_at)
 
+        timings["pipeline_elapsed_seconds"] = _elapsed_since(pipeline_started_at)
         cache_info = {
             "reused": cache_from,
             "reused_stages": sorted(cache_from),
@@ -305,6 +348,7 @@ def analyze_vod(
             "learning": learning_info,
             "transcription_skipped": transcription_skipped,
             "transcription_skip_reason": skip_reason,
+            "timings": timings,
         }
         analysis = {
             "version": 2,
