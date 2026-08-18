@@ -8,6 +8,7 @@ from typing import Any
 from .config import Settings
 from .model_access import ModelAccessPreferences, PreparedModelReference, prepare_model_reference
 from .runtime import configure_windows_cuda_dll_search
+from .transcription_status import TRANSCRIPTION_AVAILABLE
 from .util import clamp
 
 # Public faster-whisper/CTranslate2 API usage is based on upstream documentation.
@@ -146,7 +147,7 @@ def transcribe_audio(
 
     language_probability = _safe_float(getattr(info, "language_probability", None))
     metadata = {
-        "status": "available",
+        "status": TRANSCRIPTION_AVAILABLE,
         "language": getattr(info, "language", None),
         "language_probability": language_probability if language_probability is not None else 0.0,
         "device": device,
