@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+from highlightminer.database_diagnostics import initialize_database_with_diagnostics
+from highlightminer.diagnostics import log_exception, log_startup
 from highlightminer.storage import default_db_path
 from highlightminer.ui_common import render_shutdown
 from highlightminer.ui_mine import analysis_is_running, render_mine_page
@@ -12,10 +14,11 @@ _NAV_ITEMS = ["⛏️ Mine / Review", "⚙️ Settings"]
 _NAV_KEY = "main_navigation"
 
 
-def main() -> None:
+def _render_app() -> None:
     st.set_page_config(page_title="HighlightMiner", page_icon="⛏️", layout="wide")
     apply_shell_style()
     db_path = default_db_path()
+    initialize_database_with_diagnostics(db_path)
     running = analysis_is_running()
 
     with st.container(border=True):
@@ -26,8 +29,6 @@ def main() -> None:
         )
 
     if running:
-        # This executes before the navigation widget is instantiated in this run,
-        # so the UI cannot remain visually parked on Settings while work is active.
         st.session_state[_NAV_KEY] = _NAV_ITEMS[0]
 
     with st.sidebar:
@@ -53,6 +54,15 @@ def main() -> None:
         return
 
     render_mine_page(db_path)
+
+
+def main() -> None:
+    log_startup(entrypoint="streamlit")
+    try:
+        _render_app()
+    except Exception as exc:
+        log_exception("app.unhandled_error", exc)
+        raise
 
 
 if __name__ == "__main__":

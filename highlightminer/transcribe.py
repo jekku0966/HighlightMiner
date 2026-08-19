@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 import re
 import time
@@ -10,6 +11,7 @@ from typing import Any
 import psutil
 
 from .config import Settings
+from .diagnostics import log_detailed, log_event, safe_model_name
 from .model_access import ModelAccessPreferences, PreparedModelReference, prepare_model_reference
 from .runtime import configure_windows_cuda_dll_search
 from .transcription_status import TRANSCRIPTION_AVAILABLE
@@ -58,11 +60,7 @@ def _compute_label(compute_type: str) -> str:
 
 
 def _cpu_thread_count() -> int:
-    """Reserve one physical core for the desktop; use a capped logical fallback.
-
-    If the physical core count is unavailable, use all detected logical cores
-    except one, capped by ``_CPU_THREAD_FALLBACK_CAP`` to avoid oversubscription.
-    """
+    """Reserve one physical core for the desktop; use a capped logical fallback."""
     physical = psutil.cpu_count(logical=False)
     if physical is not None and physical > 0:
         return max(1, int(physical) - 1)
@@ -99,8 +97,8 @@ def resolve_device(settings: Settings) -> tuple[str, str]:
         import ctranslate2
         if ctranslate2.get_cuda_device_count() > 0:
             return "cuda", "float16" if settings.compute_type == "auto" else settings.compute_type
-    except Exception:
-        pass
+    except Exception as exc:
+        log_detailed("model.device_probe", decision="cpu", probe_error_type=type(exc).__name__)
     return "cpu", "int8" if settings.compute_type == "auto" else settings.compute_type
 
 
@@ -155,7 +153,6 @@ def transcribe_audio(
     audio_duration: float | None = None,
     progress: TranscriptionProgress | None = None,
 ) -> tuple[list[dict], dict]:
-    # On Windows this explicitly exposes the configured portable CUDA/cuDNN DLL directory.
     configure_windows_cuda_dll_search()
     from faster_whisper import WhisperModel
 
@@ -173,6 +170,23 @@ def transcribe_audio(
     if cpu_threads is not None:
         model_kwargs["cpu_threads"] = cpu_threads
 
+    model_name = safe_model_name(prepared.display_name, prepared.source)
+    log_event(
+        "model.load_start",
+        model_name=model_name,
+        model_source=prepared.source,
+        device=device,
+        compute_type=compute_type,
+        fallback=False,
+    )
+    log_detailed(
+        "model.load_options",
+        model_name=model_name,
+        model_source=prepared.source,
+        local_files_only=prepared.local_files_only,
+        cpu_threads=cpu_threads,
+    )
+
     def report(message: str, fraction: float) -> None:
         if progress is not None:
             progress(message, clamp(fraction))
@@ -189,6 +203,15 @@ def transcribe_audio(
         if device != "cuda":
             raise
         fallback_reason = f"CUDA initialization failed: {type(exc).__name__}: {exc}"
+        log_event(
+            "model.fallback",
+            level=logging.WARNING,
+            model_name=model_name,
+            model_source=prepared.source,
+            from_device="cuda",
+            to_device="cpu",
+            reason_type=type(exc).__name__,
+        )
         device, compute_type = "cpu", "int8"
         cpu_threads = _cpu_thread_count()
         model_kwargs["cpu_threads"] = cpu_threads
@@ -199,6 +222,15 @@ def transcribe_audio(
             0.0,
         )
         model = WhisperModel(prepared.reference, device=device, compute_type=compute_type, **model_kwargs)
+
+    log_event(
+        "model.load_complete",
+        model_name=model_name,
+        model_source=prepared.source,
+        device=device,
+        compute_type=compute_type,
+        fallback=bool(fallback_reason),
+    )
 
     kwargs = {
         "beam_size": int(settings.beam_size),

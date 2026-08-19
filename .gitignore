@@ -23,6 +23,7 @@ Thumbs.db
 # HighlightMiner generated data
 highlightminer_work/
 clips/
+logs/
 highlightminer.db
 highlightminer.db-shm
 highlightminer.db-wal
