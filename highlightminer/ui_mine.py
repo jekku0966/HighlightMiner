@@ -4,6 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from .analysis_identity import load_analysis_identities, load_analysis_identity, save_analysis_title
 from .categorization import normalize_content_label
 from .export import create_preview_clip, export_clip
 from .model_access import (
@@ -81,9 +82,15 @@ def _candidate_rows(analysis: dict, review: dict) -> list[dict]:
     return rows
 
 
-def _history_label(row: dict) -> str:
+def _history_label(row: dict, identity: dict[str, str]) -> str:
     created = str(row.get("created_at", "")).replace("T", " ").replace("+00:00", " UTC")
-    return f"{row['content_label']} · {row['video_name']} · run {row.get('run_number', 1)} · {created} · {row['candidates']} candidates · {row['kept']} kept"
+    title = identity.get("analysis_title", "").strip()
+    title_text = f" · {title}" if title else ""
+    return (
+        f"{identity.get('analysis_name', 'Custom')}{title_text} · {row['content_label']} · "
+        f"{row['video_name']} · run {row.get('run_number', 1)} · {created} · "
+        f"{row['candidates']} candidates · {row['kept']} kept"
+    )
 
 
 def _run_analysis_ui(
@@ -92,6 +99,7 @@ def _run_analysis_ui(
     video_path: str,
     chat_path: str,
     content_label: str,
+    analysis_title: str,
     work_dir: str,
     source_info: dict | None = None,
     reuse_features: bool = True,
@@ -120,6 +128,7 @@ def _run_analysis_ui(
             allow_model_download=allow_model_download,
             skip_transcription=skip_transcription,
         )
+        save_analysis_title(db_path, analysis_id, analysis_title)
     analysis = load_analysis(db_path, analysis_id)
     reused = analysis.get("cache", {}).get("reused_stages", [])
     if is_transcription_skipped(analysis.get("transcription")):
@@ -221,7 +230,7 @@ def _render_model_decision(db_path: Path) -> bool:
     return True
 
 
-def _render_source_sidebar(db_path: Path) -> tuple[str, str, str, str]:
+def _render_source_sidebar(db_path: Path) -> tuple[str, str, str, str, str]:
     st.header("🎬 Source")
     st.caption("Choose local files directly. The VOD is read in place and never uploaded.")
     video_path = path_picker("VOD", "video_path_input", placeholder=r"D:\VODs\stream.mp4", file_filter=_VIDEO_FILTER)
@@ -231,6 +240,12 @@ def _render_source_sidebar(db_path: Path) -> tuple[str, str, str, str]:
         "content_label_input",
         placeholder="Just Chatting / Overwatch 2 / ...",
         help="Stored with every candidate for future preference learning.",
+    )
+    analysis_title = persistent_text_input(
+        "Analysis title (optional)",
+        "analysis_title_input",
+        placeholder="Boss fight test / chat experiment / ...",
+        help="Optional note for this run. The weighting profile is shown separately as the analysis name.",
     )
     work_dir = path_picker("Work folder", "work_dir_input", default=default_work_dir(), folder=True)
 
@@ -244,10 +259,17 @@ def _render_source_sidebar(db_path: Path) -> tuple[str, str, str, str]:
     dialog_error = st.session_state.pop("native_dialog_error", None)
     if dialog_error:
         st.error(dialog_error)
-    return video_path, chat_path, content_label, work_dir
+    return video_path, chat_path, content_label, analysis_title, work_dir
 
 
-def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, content_label: str, work_dir: str) -> None:
+def _render_analysis_controls(
+    db_path: Path,
+    video_path: str,
+    chat_path: str,
+    content_label: str,
+    analysis_title: str,
+    work_dir: str,
+) -> None:
     if _render_model_decision(db_path):
         return
 
@@ -266,6 +288,7 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
                 video_path=video_path,
                 chat_path=chat_path,
                 content_label=content_label,
+                analysis_title=analysis_title,
                 work_dir=work_dir,
                 source_info=source,
                 reuse_features=True,
@@ -281,9 +304,13 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
     latest = runs[0] if runs else None
     st.warning(f"This VOD already has {len(runs)} analysis run(s). Load the latest one or create a new run.")
     if latest:
+        latest_identity = load_analysis_identity(db_path, latest["id"])
+        latest_title = latest_identity.get("analysis_title", "")
+        title_text = f" · {latest_title}" if latest_title else ""
         st.caption(
-            f"Latest: run {latest['run_number']} · {latest['candidates']} candidates · "
-            f"{latest['kept']} kept / {latest['rejected']} rejected / {latest['unreviewed']} unreviewed"
+            f"Latest: {latest_identity['analysis_name']}{title_text} · run {latest['run_number']} · "
+            f"{latest['candidates']} candidates · {latest['kept']} kept / "
+            f"{latest['rejected']} rejected / {latest['unreviewed']} unreviewed"
         )
     force_fresh = st.checkbox("Force full reprocess", value=False, help="Normally compatible audio, Whisper transcript, and chat features are reused.", key="force_fresh_rerun")
     r1, r2 = st.columns(2)
@@ -296,6 +323,7 @@ def _render_analysis_controls(db_path: Path, video_path: str, chat_path: str, co
             video_path=video_path,
             chat_path=chat_path,
             content_label=content_label,
+            analysis_title=analysis_title,
             work_dir=work_dir,
             source_info=pending.get("source"),
             reuse_features=not force_fresh,
@@ -309,7 +337,8 @@ def _render_history_sidebar(db_path: Path) -> None:
     st.subheader("🗃️ Analysis history")
     history = list_analyses(db_path, limit=50)
     if history:
-        labels = [_history_label(row) for row in history]
+        identities = load_analysis_identities(db_path, [row["id"] for row in history])
+        labels = [_history_label(row, identities.get(row["id"], {})) for row in history]
         ids = [row["id"] for row in history]
         current_id = st.session_state.get("analysis_id")
         default_index = ids.index(current_id) if current_id in ids else 0
@@ -349,6 +378,7 @@ def _render_review(db_path: Path) -> None:
         st.warning("That analysis no longer exists in the database.")
         return
 
+    identity = load_analysis_identity(db_path, analysis_id)
     candidates = analysis.get("candidates", [])
     review = load_review(db_path, analysis_id, analysis)
     content_label = normalize_content_label(analysis.get("content_label"))
@@ -363,7 +393,11 @@ def _render_review(db_path: Path) -> None:
     c5.metric("Speech recognition", "Off" if transcription_skipped else (transcription.get("language") or "On"))
     reused = analysis.get("cache", {}).get("reused_stages", [])
     cache_text = f" · reused: {', '.join(reused)}" if reused else ""
-    st.caption(f"Content / Game: **{content_label}** · source run **{analysis.get('run_number', 1)}** · Analysis ID: `{analysis_id[:12]}`{cache_text}")
+    title_text = f" · Title: **{identity['analysis_title']}**" if identity.get("analysis_title") else ""
+    st.caption(
+        f"Analysis: **{identity['analysis_name']}**{title_text} · Content / Game: **{content_label}** · "
+        f"source run **{analysis.get('run_number', 1)}** · Analysis ID: `{analysis_id[:12]}`{cache_text}"
+    )
     if transcription_skipped:
         st.info("Speech recognition was disabled for this run. Candidate scoring was renormalized across audio and available chat signals.")
     if not candidates:
@@ -441,8 +475,8 @@ def render_mine_page(db_path: Path) -> None:
     _run_queued_analysis(db_path)
 
     with st.sidebar:
-        video_path, chat_path, content_label, work_dir = _render_source_sidebar(db_path)
-        _render_analysis_controls(db_path, video_path, chat_path, content_label, work_dir)
+        video_path, chat_path, content_label, analysis_title, work_dir = _render_source_sidebar(db_path)
+        _render_analysis_controls(db_path, video_path, chat_path, content_label, analysis_title, work_dir)
         _render_history_sidebar(db_path)
         st.caption(f"Database: `{db_path}`")
         render_shutdown()
