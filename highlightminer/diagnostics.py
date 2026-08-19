@@ -33,8 +33,9 @@ _STARTUP_LOGGED = False
 _SHUTDOWN_REGISTERED = False
 _LOCK = threading.RLock()
 
-_WINDOWS_PATH_RE = re.compile(r"(?i)(?:[a-z]:\\|\\\\)[^\s\"'<>|]+")
-_POSIX_PATH_RE = re.compile(r"(?<![:\w])/(?:[^\s\"'<>]+/)*[^\s\"'<>]*")
+# Redaction deliberately prefers hiding too much over leaking a path or secret.
+_WINDOWS_PATH_RE = re.compile(r"(?i)(?:[a-z]:\\|\\\\)[^\r\n\"']+")
+_POSIX_PATH_RE = re.compile(r"(?<![:\w])/(?:[^\r\n\"']+)")
 _SECRET_RE = re.compile(
     r"(?i)\b(api[_-]?key|authorization|bearer|password|passwd|secret|token|credential)\b\s*[:=]\s*[^\s,;]+"
 )
@@ -67,7 +68,8 @@ class _BoundedFileHandler(logging.FileHandler):
         try:
             message = self.format(record) + self.terminator
             payload = message.encode("utf-8", errors="replace")
-            current = Path(self.baseFilename).stat().st_size if Path(self.baseFilename).exists() else 0
+            path = Path(self.baseFilename)
+            current = path.stat().st_size if path.exists() else 0
             if current + len(payload) > self.max_bytes:
                 marker = '{"event":"log.limit_reached","note":"log file reached configured size limit"}\n'
                 marker_bytes = marker.encode("utf-8")
@@ -145,7 +147,17 @@ def _safe_value(value: Any, *, key: str = "") -> Any:
         return {str(k): _safe_value(v, key=str(k)) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [_safe_value(item, key=key) for item in value]
-    return _redact_text(type(value).__name__)
+    return type(value).__name__
+
+
+def _safe_traceback(exc: BaseException) -> str:
+    """Keep the complete stack shape without exception text or absolute paths."""
+    lines = ["Traceback (most recent call last):"]
+    for frame in traceback.extract_tb(exc.__traceback__):
+        filename = Path(frame.filename).name or "<module>"
+        lines.append(f'  File "{filename}", line {frame.lineno}, in {frame.name}')
+    lines.append(f"{type(exc).__name__}: <message redacted>")
+    return "\n".join(lines)
 
 
 def _handler_for(kind: str, max_bytes: int) -> _BoundedFileHandler:
@@ -177,14 +189,16 @@ def log_startup(*, entrypoint: str) -> None:
         if _STARTUP_LOGGED:
             return
         _STARTUP_LOGGED = True
-    log_event("app.startup", entrypoint=entrypoint)
+    _emit(_STANDARD_LOGGER, logging.INFO, "app.startup", {"entrypoint": entrypoint})
+    _emit(_DETAILED_LOGGER, logging.INFO, "app.startup", {"entrypoint": entrypoint})
 
 
 def shutdown_logging() -> None:
     global _STANDARD_HANDLER, _DETAILED_HANDLER
     with _LOCK:
-        if _STANDARD_HANDLER is not None:
-            log_event("app.shutdown")
+        if _STANDARD_HANDLER is not None and _STARTUP_LOGGED:
+            _emit(_STANDARD_LOGGER, logging.INFO, "app.shutdown", {})
+            _emit(_DETAILED_LOGGER, logging.INFO, "app.shutdown", {})
         for logger, handler in ((_DETAILED_LOGGER, _DETAILED_HANDLER), (_STANDARD_LOGGER, _STANDARD_HANDLER)):
             if handler is not None:
                 try:
@@ -215,6 +229,8 @@ def _emit(logger: logging.Logger, level: int, event: str, fields: dict[str, Any]
 
 def log_event(event: str, *, level: int = logging.INFO, **fields: Any) -> None:
     configure_standard_logging()
+    if event != "app.startup" and not _STARTUP_LOGGED:
+        log_startup(entrypoint="runtime")
     _emit(_STANDARD_LOGGER, level, event, fields)
     _emit(_DETAILED_LOGGER, level, event, fields)
 
@@ -224,9 +240,8 @@ def log_warning(event: str, **fields: Any) -> None:
 
 
 def log_exception(event: str, exc: BaseException, **fields: Any) -> None:
-    formatted = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     safe_fields = dict(fields)
-    safe_fields.update(error_type=type(exc).__name__, traceback=_redact_text(formatted))
+    safe_fields.update(error_type=type(exc).__name__, traceback=_safe_traceback(exc))
     log_event(event, level=logging.ERROR, **safe_fields)
 
 
@@ -237,6 +252,8 @@ def detailed_active() -> bool:
 def start_detailed_run(run_id: str | None = None) -> Path:
     global _DETAILED_HANDLER
     configure_standard_logging()
+    if not _STARTUP_LOGGED:
+        log_startup(entrypoint="runtime")
     with _LOCK:
         if _DETAILED_HANDLER is not None:
             return Path(_DETAILED_HANDLER.baseFilename)
@@ -248,7 +265,7 @@ def start_detailed_run(run_id: str | None = None) -> Path:
         _DETAILED_HANDLER.setFormatter(logging.Formatter("%(message)s"))
         _DETAILED_LOGGER.handlers[:] = [_DETAILED_HANDLER]
         _prune("detailed-", DETAILED_RETAIN)
-    log_event("diagnostics.detailed_start")
+    _emit(_DETAILED_LOGGER, logging.INFO, "diagnostics.detailed_start", {})
     return filename
 
 
@@ -343,13 +360,12 @@ def signal_statistics(rows: list[dict[str, Any]], *, score_key: str = "score") -
 
 
 def ffmpeg_failure(tool: str, exc: subprocess.CalledProcessError) -> None:
-    stderr = _redact_text(str(exc.stderr or ""))
     log_event(
         "ffmpeg.failure",
         level=logging.ERROR,
         tool=str(tool),
         exit_code=int(exc.returncode),
-        stderr=stderr,
+        stderr=_redact_text(str(exc.stderr or "")),
     )
 
 
