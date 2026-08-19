@@ -64,24 +64,23 @@ def load_analysis_identities(
     if not ids:
         return {}
 
-    placeholders = ",".join("?" for _ in ids)
-    title_keys = [_title_key(analysis_id) for analysis_id in ids]
-    title_placeholders = ",".join("?" for _ in title_keys)
-
+    # History currently requests at most 50 runs. Small parameterized lookups keep
+    # the SQL static and avoid composing an IN clause from caller-controlled IDs.
+    rows = []
     with connect(db_path) as conn:
-        rows = conn.execute(
-            f"SELECT id, settings_json FROM analyses WHERE id IN ({placeholders})",
-            ids,
-        ).fetchall()
-        title_rows = conn.execute(
-            f"SELECT key, value FROM metadata WHERE key IN ({title_placeholders})",
-            title_keys,
-        ).fetchall()
+        for analysis_id in ids:
+            row = conn.execute(
+                """
+                SELECT a.id, a.settings_json, m.value AS analysis_title
+                FROM analyses a
+                LEFT JOIN metadata m ON m.key = ?
+                WHERE a.id = ?
+                """,
+                (_title_key(analysis_id), analysis_id),
+            ).fetchone()
+            if row is not None:
+                rows.append(row)
 
-    titles = {
-        str(row["key"])[len(_ANALYSIS_TITLE_PREFIX):]: normalize_analysis_title(row["value"])
-        for row in title_rows
-    }
     result: dict[str, dict[str, str]] = {}
     for row in rows:
         analysis_id = str(row["id"])
@@ -91,7 +90,7 @@ def load_analysis_identities(
             settings = {}
         result[analysis_id] = {
             "analysis_name": analysis_name_from_settings(settings if isinstance(settings, Mapping) else {}),
-            "analysis_title": titles.get(analysis_id, ""),
+            "analysis_title": normalize_analysis_title(row["analysis_title"]),
         }
     return result
 
