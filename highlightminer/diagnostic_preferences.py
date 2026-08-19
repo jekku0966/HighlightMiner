@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .database_diagnostics import initialize_database_with_diagnostics
 from .diagnostics import log_detailed
 from .storage import connect
 
@@ -9,6 +10,7 @@ _DETAILED_NEXT_RUN_KEY = "detailed_diagnostics_next_run"
 
 
 def detailed_diagnostics_next_run(db_path: str | Path | None = None) -> bool:
+    initialize_database_with_diagnostics(db_path)
     with connect(db_path) as conn:
         log_detailed("database.operation", operation="load_diagnostic_preference")
         row = conn.execute("SELECT value FROM metadata WHERE key = ?", (_DETAILED_NEXT_RUN_KEY,)).fetchone()
@@ -16,6 +18,7 @@ def detailed_diagnostics_next_run(db_path: str | Path | None = None) -> bool:
 
 
 def set_detailed_diagnostics_next_run(enabled: bool, db_path: str | Path | None = None) -> bool:
+    initialize_database_with_diagnostics(db_path)
     value = "1" if enabled else "0"
     with connect(db_path) as conn:
         log_detailed("database.operation", operation="save_diagnostic_preference")
@@ -32,6 +35,7 @@ def set_detailed_diagnostics_next_run(enabled: bool, db_path: str | Path | None 
 
 def consume_detailed_diagnostics_next_run(db_path: str | Path | None = None) -> bool:
     """Atomically consume the one-shot flag before an analysis starts."""
+    initialize_database_with_diagnostics(db_path)
     with connect(db_path) as conn:
         log_detailed("database.operation", operation="consume_diagnostic_preference")
         row = conn.execute("SELECT value FROM metadata WHERE key = ?", (_DETAILED_NEXT_RUN_KEY,)).fetchone()
