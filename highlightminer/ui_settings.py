@@ -17,6 +17,7 @@ from .settings_presets import (
 )
 from .settings_store import export_app_settings, import_app_settings, load_app_settings, reset_app_settings, save_app_settings
 from .ui_common import _JSON_FILTER, choose_save_file, path_picker
+from .ui_diagnostics import render_diagnostics_settings
 from .ui_model_access import render_model_access_settings
 
 _EDITOR_KEYS = {
@@ -53,10 +54,6 @@ def _model_editor_values(settings: Settings) -> tuple[str, str]:
 
 
 def _editor_needs_seed(state: Mapping[str, Any]) -> bool:
-    # Only always-rendered widgets decide whether the editor was cleaned up by
-    # Streamlit. The advanced model-name field is conditional: requiring it here
-    # would snap a freshly selected "Other / advanced…" choice back to the saved
-    # model before the text field has had a chance to render.
     required_names = [name for name in _EDITOR_KEYS if name != "custom_model"]
     return any(_EDITOR_KEYS[name] not in state for name in required_names)
 
@@ -278,6 +275,9 @@ def render_settings_page(db_path: Path) -> None:
                 st.success(f"Exported to {destination}. Model download permission and local model selection are intentionally not exported.")
             except Exception as exc:
                 st.exception(exc)
+
+    st.divider()
+    render_diagnostics_settings(db_path)
 
     st.divider()
     s1, s2 = st.columns([3, 1])
