@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 from .categorization import content_folder_name
-from .diagnostics import ffmpeg_failure, log_detailed, log_event
+from .diagnostics import ffmpeg_failure, log_detailed, log_event, log_exception
 from .media import has_encoder, require_executable, require_ffmpeg
 from .util import ensure_dir
 
@@ -118,7 +118,11 @@ def _run_h264_encode(
         audio_bitrate = "192k"
 
     log_detailed("encoder.selection", encoder="libx264", preview=preview)
-    _run_encode(finish(video_args, audio_bitrate), encoder="libx264")
+    try:
+        _run_encode(finish(video_args, audio_bitrate), encoder="libx264")
+    except subprocess.CalledProcessError as exc:
+        log_exception("encoder.error", exc, encoder="libx264", preview=preview)
+        raise
 
 
 def create_preview_clip(
