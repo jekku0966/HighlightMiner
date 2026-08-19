@@ -4,13 +4,20 @@ import logging
 import os
 from pathlib import Path
 
+from highlightminer import diagnostics
 from highlightminer.config import Settings
 from highlightminer.diagnostic_preferences import (
     consume_detailed_diagnostics_next_run,
     detailed_diagnostics_next_run,
     set_detailed_diagnostics_next_run,
 )
-from highlightminer import diagnostics
+
+
+def test_logging_policy_constants_match_product_limits() -> None:
+    assert diagnostics.STANDARD_MAX_BYTES == 2 * 1024 * 1024
+    assert diagnostics.DETAILED_MAX_BYTES == 10 * 1024 * 1024
+    assert diagnostics.STANDARD_RETAIN == 5
+    assert diagnostics.DETAILED_RETAIN == 2
 
 
 def test_redaction_blocks_sensitive_fields_and_paths() -> None:
@@ -65,18 +72,27 @@ def test_bounded_handler_never_exceeds_limit(tmp_path: Path) -> None:
     assert target.stat().st_size <= 256
 
 
-def test_retention_keeps_latest_standard_logs(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(diagnostics, "log_folder", lambda: tmp_path)
-    files = []
-    for index in range(7):
-        path = tmp_path / f"standard-{index}.log"
+def _make_logs(tmp_path: Path, prefix: str, count: int) -> None:
+    for index in range(count):
+        path = tmp_path / f"{prefix}{index}.log"
         path.write_text(str(index), encoding="utf-8")
         os.utime(path, (1000 + index, 1000 + index))
-        files.append(path)
 
-    diagnostics._prune("standard-", 5)
+
+def test_retention_keeps_latest_five_standard_logs(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(diagnostics, "log_folder", lambda: tmp_path)
+    _make_logs(tmp_path, "standard-", 7)
+    diagnostics._prune("standard-", diagnostics.STANDARD_RETAIN)
     remaining = {path.name for path in tmp_path.glob("standard-*.log")}
     assert remaining == {f"standard-{index}.log" for index in range(2, 7)}
+
+
+def test_retention_keeps_latest_two_detailed_logs(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(diagnostics, "log_folder", lambda: tmp_path)
+    _make_logs(tmp_path, "detailed-", 5)
+    diagnostics._prune("detailed-", diagnostics.DETAILED_RETAIN)
+    remaining = {path.name for path in tmp_path.glob("detailed-*.log")}
+    assert remaining == {"detailed-3.log", "detailed-4.log"}
 
 
 def test_detailed_next_run_is_consumed_once(tmp_path: Path) -> None:
