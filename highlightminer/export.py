@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 from pathlib import Path
 
 from .categorization import content_folder_name
+from .diagnostics import ffmpeg_failure, log_detailed, log_event, log_exception
 from .media import has_encoder, require_executable, require_ffmpeg
 from .util import ensure_dir
 
@@ -21,7 +23,24 @@ def _non_overwriting_path(path: Path) -> Path:
         candidate = path.with_name(f"{path.stem}_{index}{path.suffix}")
         if not candidate.exists():
             return candidate
-    raise RuntimeError(f"Could not find a free export filename beside {path}")
+    raise RuntimeError("Could not find a free export filename.")
+
+
+def _run_encode(command: list[str], *, encoder: str) -> None:
+    try:
+        subprocess.run(
+            command,
+            check=True,
+            shell=False,
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.CalledProcessError as exc:
+        ffmpeg_failure("ffmpeg", exc)
+        raise
+    log_detailed("encoder.complete", encoder=encoder, exit_code=0)
 
 
 def _run_h264_encode(
@@ -78,9 +97,17 @@ def _run_h264_encode(
             else:
                 video_args = ["-c:v", "h264_nvenc", "-preset", "p5", "-cq", "19"]
                 audio_bitrate = "192k"
-            subprocess.run(finish(video_args, audio_bitrate), check=True, shell=False)
+            log_detailed("encoder.selection", encoder="h264_nvenc", preview=preview)
+            _run_encode(finish(video_args, audio_bitrate), encoder="h264_nvenc")
             return
         except subprocess.CalledProcessError:
+            log_event(
+                "encoder.fallback",
+                level=logging.WARNING,
+                from_encoder="h264_nvenc",
+                to_encoder="libx264",
+                preview=preview,
+            )
             out.unlink(missing_ok=True)
 
     if preview:
@@ -90,7 +117,12 @@ def _run_h264_encode(
         video_args = ["-c:v", "libx264", "-preset", "medium", "-crf", "18"]
         audio_bitrate = "192k"
 
-    subprocess.run(finish(video_args, audio_bitrate), check=True, shell=False)
+    log_detailed("encoder.selection", encoder="libx264", preview=preview)
+    try:
+        _run_encode(finish(video_args, audio_bitrate), encoder="libx264")
+    except subprocess.CalledProcessError as exc:
+        log_exception("encoder.error", exc, encoder="libx264", preview=preview)
+        raise
 
 
 def create_preview_clip(
@@ -143,4 +175,5 @@ def export_clip(
     out = _non_overwriting_path(out_dir / f"{stem}.mp4")
 
     _run_h264_encode(ffmpeg, src, out, float(start), duration, preview=False)
+    log_event("export.complete", count=1)
     return out
