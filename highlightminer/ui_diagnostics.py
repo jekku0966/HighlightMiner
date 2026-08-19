@@ -14,9 +14,9 @@ from .diagnostics import (
     log_exception,
     open_log_folder,
 )
+from .local_clipboard import copy_text_to_clipboard
 
 _DETAILED_KEY = "diagnostics_detailed_next_run"
-_SUMMARY_KEY = "diagnostics_summary"
 
 
 def render_diagnostics_settings(db_path: Path) -> None:
@@ -65,21 +65,21 @@ def render_diagnostics_settings(db_path: Path) -> None:
             st.exception(exc)
 
     if summary_col.button("Copy diagnostic summary", width="stretch"):
-        st.session_state[_SUMMARY_KEY] = diagnostic_summary(detailed_armed=armed)
+        try:
+            summary = diagnostic_summary(detailed_armed=armed)
+            copy_text_to_clipboard(summary)
+            st.success("Diagnostic summary copied to the local clipboard.")
+        except Exception as exc:
+            log_exception("diagnostics.copy_summary_error", exc)
+            st.exception(exc)
 
     if delete_col.button("Delete logs", width="stretch"):
         try:
             removed = delete_logs()
-            st.session_state.pop(_SUMMARY_KEY, None)
             st.success(f"Deleted {removed} log file(s). Standard logging restarted with a fresh local log.")
         except Exception as exc:
             log_exception("diagnostics.delete_logs_error", exc)
             st.exception(exc)
-
-    summary = st.session_state.get(_SUMMARY_KEY)
-    if summary:
-        st.caption("Diagnostic summary ready — use the copy icon in the box below.")
-        st.code(str(summary), language=None)
 
     with st.expander("What HighlightMiner never writes to logs"):
         st.write(
