@@ -94,6 +94,13 @@ def extract_analysis_audio(video_path: str | Path, wav_path: str | Path) -> Path
     src = str(Path(video_path).expanduser().resolve())
     dst = Path(wav_path).expanduser().resolve()
     dst.parent.mkdir(parents=True, exist_ok=True)
+    log_detailed(
+        "encoder.selection",
+        encoder="pcm_s16le",
+        purpose="analysis_audio",
+        sample_rate_hz=16000,
+        channels=1,
+    )
     _run([
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-i", src, "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(dst),
