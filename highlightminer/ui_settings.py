@@ -8,7 +8,13 @@ import streamlit as st
 
 from .config import Settings, _STANDARD_WHISPER_MODELS
 from .runtime import app_root
-from .settings_presets import WEIGHT_PRESETS, detect_weight_preset, normalize_weights
+from .settings_presets import (
+    WEIGHT_PRESETS,
+    detect_weight_preset,
+    normalize_weights,
+    preset_is_pending,
+    preset_preview,
+)
 from .settings_store import export_app_settings, import_app_settings, load_app_settings, reset_app_settings, save_app_settings
 from .ui_common import _JSON_FILTER, choose_save_file, path_picker
 from .ui_model_access import render_model_access_settings
@@ -47,10 +53,6 @@ def _model_editor_values(settings: Settings) -> tuple[str, str]:
 
 
 def _editor_needs_seed(state: Mapping[str, Any]) -> bool:
-    # Only always-rendered widgets decide whether the editor was cleaned up by
-    # Streamlit. The advanced model-name field is conditional: requiring it here
-    # would snap a freshly selected "Other / advanced…" choice back to the saved
-    # model before the text field has had a chance to render.
     required_names = [name for name in _EDITOR_KEYS if name != "custom_model"]
     return any(_EDITOR_KEYS[name] not in state for name in required_names)
 
@@ -89,6 +91,14 @@ def _seed_editor(settings: Settings, *, force: bool = False) -> None:
 def _request_reload(message: str) -> None:
     st.session_state["settings_editor_reload"] = True
     st.session_state["settings_notice"] = message
+
+
+def _editor_weights() -> dict[str, float]:
+    return {
+        "audio": float(st.session_state[_EDITOR_KEYS["audio_weight"]]),
+        "transcript": float(st.session_state[_EDITOR_KEYS["transcript_weight"]]),
+        "chat": float(st.session_state[_EDITOR_KEYS["chat_weight"]]),
+    }
 
 
 def _apply_preset() -> None:
@@ -132,11 +142,7 @@ def _build_settings() -> Settings:
         max_candidate_sec=float(st.session_state[_EDITOR_KEYS["max_clip"]]),
         min_candidate_score=float(st.session_state[_EDITOR_KEYS["min_score"]]),
         max_candidates=int(st.session_state[_EDITOR_KEYS["max_candidates"]]),
-        weights={
-            "audio": float(st.session_state[_EDITOR_KEYS["audio_weight"]]),
-            "transcript": float(st.session_state[_EDITOR_KEYS["transcript_weight"]]),
-            "chat": float(st.session_state[_EDITOR_KEYS["chat_weight"]]),
-        },
+        weights=_editor_weights(),
         reaction_phrases=phrases,
     )
 
@@ -184,20 +190,36 @@ def render_settings_page(db_path: Path) -> None:
         st.checkbox("VAD filtering", key=_EDITOR_KEYS["vad"], help="Voice activity detection can skip long non-speech regions during transcription.")
 
     with detection:
+        current_weights = _editor_weights()
         p1, p2 = st.columns([3, 1], vertical_alignment="bottom")
         with p1:
             st.selectbox("Signal weighting preset", list(WEIGHT_PRESETS) + ["Custom"], key=_EDITOR_KEYS["preset"], help="Presets change signal weights only.")
+        selected_preset = str(st.session_state[_EDITOR_KEYS["preset"]])
+        preset_pending = preset_is_pending(selected_preset, current_weights)
         with p2:
-            st.button("Apply preset", width="stretch", disabled=st.session_state[_EDITOR_KEYS["preset"]] == "Custom", on_click=_apply_preset)
+            st.button(
+                "Apply preset",
+                width="stretch",
+                disabled=selected_preset == "Custom",
+                type="primary" if preset_pending else "secondary",
+                on_click=_apply_preset,
+            )
+
+        preview = preset_preview(selected_preset)
+        if preview is not None:
+            apply_state = " — **not applied**" if preset_pending else " — applied"
+            st.caption(
+                f"Selected preset: **{selected_preset}** · "
+                f"audio {preview['audio']:.0%} / transcript {preview['transcript']:.0%} / chat {preview['chat']:.0%}"
+                f"{apply_state}"
+            )
+        else:
+            st.caption("Selected preset: **Custom** · use the sliders below to set the signal weights.")
 
         st.slider("Audio weight", 0.0, 1.0, step=0.01, key=_EDITOR_KEYS["audio_weight"])
         st.slider("Transcript / reaction weight", 0.0, 1.0, step=0.01, key=_EDITOR_KEYS["transcript_weight"])
         st.slider("Chat weight", 0.0, 1.0, step=0.01, key=_EDITOR_KEYS["chat_weight"])
-        raw_weights = {
-            "audio": st.session_state[_EDITOR_KEYS["audio_weight"]],
-            "transcript": st.session_state[_EDITOR_KEYS["transcript_weight"]],
-            "chat": st.session_state[_EDITOR_KEYS["chat_weight"]],
-        }
+        raw_weights = _editor_weights()
         if sum(raw_weights.values()) > 0:
             effective = normalize_weights(raw_weights)
             m1, m2, m3 = st.columns(3)
