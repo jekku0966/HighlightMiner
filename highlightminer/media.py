@@ -7,6 +7,7 @@ import subprocess
 from functools import lru_cache
 from pathlib import Path
 
+from .diagnostics import ffmpeg_failure, log_detailed
 from .runtime import app_root
 
 # FFmpeg/ffprobe are invoked through their documented CLI. No FFmpeg code is bundled.
@@ -19,14 +20,18 @@ def find_executable(name: str) -> str | None:
     filenames = [f"{name}.exe", name] if os.name == "nt" else [name]
 
     # Prefer a portable ./bin folder, then the repository/application root.
-    for directory in (root / "bin", root):
+    for source, directory in (("portable-bin", root / "bin"), ("app-root", root)):
         for filename in filenames:
             candidate = directory / filename
             if candidate.is_file():
+                log_detailed("ffmpeg.executable_resolution", tool=name, source=source)
                 return str(candidate)
 
-    # Fall back to the normal operating-system PATH lookup.
-    return shutil.which(name)
+    # Fall back to the normal operating-system PATH lookup without logging PATH itself.
+    resolved = shutil.which(name)
+    if resolved:
+        log_detailed("ffmpeg.executable_resolution", tool=name, source="system-path")
+    return resolved
 
 
 def require_executable(name: str) -> str:
@@ -40,15 +45,21 @@ def require_executable(name: str) -> str:
 
 
 def _run(cmd: list[str], capture: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        cmd,
-        text=True,
-        capture_output=capture,
-        check=True,
-        shell=False,
-        encoding="utf-8",
-        errors="replace",
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            text=True,
+            capture_output=capture,
+            check=True,
+            shell=False,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except subprocess.CalledProcessError as exc:
+        ffmpeg_failure(Path(cmd[0]).name, exc)
+        raise
+    log_detailed("ffmpeg.complete", tool=Path(cmd[0]).name, exit_code=int(result.returncode))
+    return result
 
 
 def require_ffmpeg() -> None:
@@ -73,7 +84,7 @@ def probe_media(path: str | Path) -> dict:
     data = json.loads(result.stdout)
     duration = float(data.get("format", {}).get("duration", 0.0) or 0.0)
     if duration <= 0:
-        raise RuntimeError(f"Could not determine duration for {p}")
+        raise RuntimeError("Could not determine media duration.")
     return {"duration": duration, "streams": data.get("streams", [])}
 
 
