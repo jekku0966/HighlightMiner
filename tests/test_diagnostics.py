@@ -46,6 +46,21 @@ def test_redaction_blocks_sensitive_fields_and_paths() -> None:
     assert "<path>" in encoded
 
 
+def test_safe_traceback_keeps_stack_but_drops_exception_message_and_directories() -> None:
+    try:
+        raise RuntimeError(r"PRIVATE CHAT C:\Users\alice\Videos\stream.mp4")
+    except RuntimeError as exc:
+        rendered = diagnostics._safe_traceback(exc)
+
+    assert "Traceback (most recent call last):" in rendered
+    assert "test_safe_traceback_keeps_stack" in rendered
+    assert "test_diagnostics.py" in rendered
+    assert "RuntimeError: <message redacted>" in rendered
+    assert "PRIVATE CHAT" not in rendered
+    assert "alice" not in rendered
+    assert r"C:\Users" not in rendered
+
+
 def test_redacted_settings_never_include_reaction_phrase_values() -> None:
     settings = Settings(reaction_phrases=["PRIVATE REACTION PHRASE"])
     data = diagnostics.redacted_settings(settings)
