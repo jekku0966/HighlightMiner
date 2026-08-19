@@ -36,8 +36,8 @@ def _initialize_database_with_diagnostics(db_path: Path) -> None:
         return
     before = _existing_schema_version(db_path)
     try:
-        with connect(db_path):
-            pass
+        conn = connect(db_path)
+        conn.close()
     except Exception as exc:
         log_exception("database.initialization_error", exc)
         raise
