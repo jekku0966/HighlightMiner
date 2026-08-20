@@ -3,12 +3,19 @@ from __future__ import annotations
 import logging
 import re
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 from .categorization import content_folder_name
 from .diagnostics import ffmpeg_failure, log_detailed, log_event, log_exception
 from .media import has_encoder, require_executable, require_ffmpeg
 from .util import ensure_dir
+
+_PREVIEW_CACHE_KEEP = 4
+_PREVIEW_CLEANUP_RETRIES = 3
+_PREVIEW_CLEANUP_DELAY_SEC = 0.05
+_PREVIEW_GENERATION_LOCK = threading.RLock()
 
 
 def safe_name(text: str) -> str:
@@ -24,6 +31,47 @@ def _non_overwriting_path(path: Path) -> Path:
         if not candidate.exists():
             return candidate
     raise RuntimeError("Could not find a free export filename.")
+
+
+def _retry_unlink(path: Path) -> bool:
+    """Best-effort deletion for preview files that may still be held by Windows."""
+    for attempt in range(_PREVIEW_CLEANUP_RETRIES):
+        try:
+            path.unlink(missing_ok=True)
+            return True
+        except FileNotFoundError:
+            return True
+        except (PermissionError, OSError):
+            if attempt + 1 < _PREVIEW_CLEANUP_RETRIES:
+                time.sleep(_PREVIEW_CLEANUP_DELAY_SEC)
+    return False
+
+
+def _prune_preview_files(out_dir: Path, stem: str, *, keep_path: Path) -> None:
+    """Prune old previews without making successful preview generation fail."""
+    previews: list[Path] = []
+    for path in out_dir.glob(f"{stem}_*.mp4"):
+        try:
+            if path.is_file():
+                previews.append(path)
+        except OSError:
+            continue
+
+    def modified(path: Path) -> int:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return 0
+
+    previews.sort(key=modified, reverse=True)
+    protected = {keep_path}
+    for path in previews:
+        if path == keep_path:
+            continue
+        if len(protected) < _PREVIEW_CACHE_KEEP:
+            protected.add(path)
+            continue
+        _retry_unlink(path)
 
 
 def _run_encode(command: list[str], *, encoder: str) -> None:
@@ -145,14 +193,17 @@ def create_preview_clip(
     signature = f"{start:.3f}_{end:.3f}".replace(".", "_")
     out = out_dir / f"{stem}_{signature}.mp4"
 
-    if out.exists() and out.stat().st_size > 0:
+    # Streamlit/browser video playback can keep an earlier preview open on
+    # Windows. Never delete the currently displayed predecessor before the
+    # replacement has been encoded successfully.
+    with _PREVIEW_GENERATION_LOCK:
+        if out.exists() and out.stat().st_size > 0:
+            _prune_preview_files(out_dir, stem, keep_path=out)
+            return out
+
+        _run_h264_encode(ffmpeg, src, out, start, duration, preview=True)
+        _prune_preview_files(out_dir, stem, keep_path=out)
         return out
-
-    for old in out_dir.glob(f"{stem}_*.mp4"):
-        old.unlink(missing_ok=True)
-
-    _run_h264_encode(ffmpeg, src, out, start, duration, preview=True)
-    return out
 
 
 def export_clip(
