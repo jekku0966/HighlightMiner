@@ -23,6 +23,7 @@ _LABEL_TO_CONSENT = {label: value for value, label in _CONSENT_LABELS.items()}
 _CONSENT_EDITOR_KEY = "model_download_consent_editor"
 _LOCAL_MODEL_EDITOR_KEY = "local_whisper_model_path_editor"
 _MODEL_ACCESS_SYNC_KEY = "model_access_editor_persisted_value"
+_MODEL_ACCESS_NOTICE_KEY = "model_access_notice"
 
 
 def _sync_editor_with_persisted(preferences: ModelAccessPreferences) -> None:
@@ -41,6 +42,19 @@ def _sync_editor_with_persisted(preferences: ModelAccessPreferences) -> None:
     st.session_state[_MODEL_ACCESS_SYNC_KEY] = persisted
 
 
+def _queue_saved_editor_reload(saved: ModelAccessPreferences) -> None:
+    """Request a safe next-rerun resync without mutating live widget-owned keys."""
+    st.session_state.pop(_MODEL_ACCESS_SYNC_KEY, None)
+    st.session_state[_MODEL_ACCESS_NOTICE_KEY] = (
+        "Model access saved. "
+        + (
+            "Local model selected."
+            if saved.local_model_path
+            else f"Download policy: {_CONSENT_LABELS[saved.download_consent]}."
+        )
+    )
+
+
 def render_model_access_settings(db_path: Path) -> None:
     preferences = load_model_access(db_path)
     root = models_root()
@@ -48,6 +62,10 @@ def render_model_access_settings(db_path: Path) -> None:
     _sync_editor_with_persisted(preferences)
 
     st.subheader("Model access")
+    notice = st.session_state.pop(_MODEL_ACCESS_NOTICE_KEY, None)
+    if notice:
+        st.success(notice)
+
     labels = list(_CONSENT_LABELS.values())
     st.radio(
         "Recognition-model downloads",
@@ -87,15 +105,7 @@ def render_model_access_settings(db_path: Path) -> None:
                 ModelAccessPreferences(consent, local_path or None),
                 db_path,
             )
-            st.session_state[_CONSENT_EDITOR_KEY] = _CONSENT_LABELS[saved.download_consent]
-            st.session_state[_LOCAL_MODEL_EDITOR_KEY] = saved.local_model_path or ""
-            st.session_state[_MODEL_ACCESS_SYNC_KEY] = (
-                saved.download_consent,
-                saved.local_model_path or "",
-            )
-            st.success(
-                "Model access saved. "
-                + ("Local model selected." if saved.local_model_path else f"Download policy: {_CONSENT_LABELS[saved.download_consent]}.")
-            )
+            _queue_saved_editor_reload(saved)
+            st.rerun()
         except Exception as exc:
             st.exception(exc)
