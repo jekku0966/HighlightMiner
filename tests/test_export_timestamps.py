@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from highlightminer import export
 
 
@@ -47,5 +49,5 @@ def test_export_repairs_reversed_range_before_encode(monkeypatch, tmp_path: Path
     start, clip_duration, preview = calls[0]
     assert 0.0 <= start < 100.0
     assert start + clip_duration <= 100.0
-    assert clip_duration == 0.1
+    assert clip_duration == pytest.approx(0.1)
     assert preview is False
