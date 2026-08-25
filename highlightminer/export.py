@@ -5,6 +5,7 @@ import re
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from .categorization import content_folder_name
@@ -16,6 +17,12 @@ _PREVIEW_CACHE_KEEP = 4
 _PREVIEW_CLEANUP_RETRIES = 3
 _PREVIEW_CLEANUP_DELAY_SEC = 0.05
 _PREVIEW_GENERATION_LOCK = threading.RLock()
+
+
+@dataclass(frozen=True)
+class PreviewClipResult:
+    path: Path
+    cleanup_failures: int = 0
 
 
 def safe_name(text: str) -> str:
@@ -47,8 +54,8 @@ def _retry_unlink(path: Path) -> bool:
     return False
 
 
-def _prune_preview_files(out_dir: Path, stem: str, *, keep_path: Path) -> None:
-    """Prune old previews without making successful preview generation fail."""
+def _prune_preview_files(out_dir: Path, stem: str, *, keep_path: Path) -> int:
+    """Prune old previews and return the number that remained after retries."""
     previews: list[Path] = []
     for path in out_dir.glob(f"{stem}_*.mp4"):
         try:
@@ -65,13 +72,22 @@ def _prune_preview_files(out_dir: Path, stem: str, *, keep_path: Path) -> None:
 
     previews.sort(key=modified, reverse=True)
     protected = {keep_path}
+    cleanup_failures = 0
     for path in previews:
         if path == keep_path:
             continue
         if len(protected) < _PREVIEW_CACHE_KEEP:
             protected.add(path)
             continue
-        _retry_unlink(path)
+        if not _retry_unlink(path):
+            cleanup_failures += 1
+    if cleanup_failures:
+        log_event(
+            "preview.cleanup_failed",
+            level=logging.WARNING,
+            failed_files=cleanup_failures,
+        )
+    return cleanup_failures
 
 
 def _run_encode(command: list[str], *, encoder: str) -> None:
@@ -179,7 +195,7 @@ def create_preview_clip(
     clip_id: str,
     start: float,
     end: float,
-) -> Path:
+) -> PreviewClipResult:
     require_ffmpeg()
     ffmpeg = require_executable("ffmpeg")
     src = Path(video_path).expanduser().resolve()
@@ -198,12 +214,12 @@ def create_preview_clip(
     # replacement has been encoded successfully.
     with _PREVIEW_GENERATION_LOCK:
         if out.exists() and out.stat().st_size > 0:
-            _prune_preview_files(out_dir, stem, keep_path=out)
-            return out
+            cleanup_failures = _prune_preview_files(out_dir, stem, keep_path=out)
+            return PreviewClipResult(out, cleanup_failures)
 
         _run_h264_encode(ffmpeg, src, out, start, duration, preview=True)
-        _prune_preview_files(out_dir, stem, keep_path=out)
-        return out
+        cleanup_failures = _prune_preview_files(out_dir, stem, keep_path=out)
+        return PreviewClipResult(out, cleanup_failures)
 
 
 def export_clip(

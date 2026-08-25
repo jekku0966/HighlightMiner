@@ -441,16 +441,24 @@ def _render_review(db_path: Path) -> None:
     if not preview_closed:
         try:
             source_video = validate_local_video(analysis["video_path"])
-            with st.spinner("Preparing lightweight preview…"):
-                preview_path = create_preview_clip(source_video, preview_dir, candidate["id"], float(start), preview_end)
-            preview_slot.video(str(preview_path), width=640)
-            st.caption(f"Local preview only: {format_time(float(start))} → {format_time(preview_end)}. The full source VOD is never sent to the UI player.")
         except Exception as exc:
-            if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 32:
-                st.error("The previous preview is still being released by Windows. Try **Update preview** again.")
-            else:
-                st.error("Could not build the lightweight preview clip. Check the source VOD and FFmpeg setup.")
+            st.error("Could not open the source VOD. Check that the local file still exists and is readable.")
             st.exception(exc)
+        else:
+            try:
+                with st.spinner("Preparing lightweight preview…"):
+                    preview = create_preview_clip(source_video, preview_dir, candidate["id"], float(start), preview_end)
+                preview_slot.video(str(preview.path), width=640)
+                st.caption(f"Local preview only: {format_time(float(start))} → {format_time(preview_end)}. The full source VOD is never sent to the UI player.")
+                if preview.cleanup_failures:
+                    st.warning(
+                        "Preview ready, but Windows is still holding "
+                        f"{preview.cleanup_failures} older temporary preview file(s). "
+                        "Cleanup will be retried the next time this preview is updated."
+                    )
+            except Exception as exc:
+                st.error("Could not build the lightweight preview clip. Check the local preview folder and FFmpeg setup.")
+                st.exception(exc)
     else:
         preview_slot.empty()
         st.caption("Preview closed. Use **Update preview** to load it again.")
