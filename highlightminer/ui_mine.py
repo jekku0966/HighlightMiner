@@ -6,7 +6,7 @@ import streamlit as st
 
 from .analysis_identity import load_analysis_identities, load_analysis_identity, save_analysis_title
 from .categorization import normalize_content_label
-from .export import create_preview_clip, export_clip
+from .export import PreviewFileLockError, create_preview_clip, export_clip
 from .model_access import (
     ModelAccessPreferences,
     ModelDecisionRequired,
@@ -456,6 +456,12 @@ def _render_review(db_path: Path) -> None:
                         f"{preview.cleanup_failures} older temporary preview file(s). "
                         "Cleanup will be retried the next time this preview is updated."
                     )
+            except PreviewFileLockError as exc:
+                st.error(
+                    "Windows could not remove or replace a temporary preview file. "
+                    "Close any program using the preview folder and try **Update preview** again."
+                )
+                st.exception(exc)
             except Exception as exc:
                 st.error("Could not build the lightweight preview clip. Check the local preview folder and FFmpeg setup.")
                 st.exception(exc)

@@ -25,6 +25,10 @@ class PreviewClipResult:
     cleanup_failures: int = 0
 
 
+class PreviewFileLockError(PermissionError):
+    """A temporary preview could not be removed or replaced due to file access."""
+
+
 def safe_name(text: str) -> str:
     text = re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("._")
     return text[:80] or "highlight"
@@ -219,10 +223,13 @@ def create_preview_clip(
             return PreviewClipResult(out, cleanup_failures)
 
         if not _retry_unlink(partial):
-            raise PermissionError("Could not remove an incomplete preview from an earlier attempt.")
+            raise PreviewFileLockError("Could not remove an incomplete preview from an earlier attempt.")
         try:
             _run_h264_encode(ffmpeg, src, partial, start, duration, preview=True)
-            partial.replace(out)
+            try:
+                partial.replace(out)
+            except PermissionError as exc:
+                raise PreviewFileLockError("Could not replace the temporary preview file.") from exc
         except Exception:
             _retry_unlink(partial)
             raise

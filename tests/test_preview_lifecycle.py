@@ -119,3 +119,48 @@ def test_failed_preview_encode_does_not_leave_a_cached_partial(monkeypatch, tmp_
 
     assert encode_attempts == 2
     assert result.path.read_bytes() == b"complete"
+
+
+def test_locked_partial_raises_preview_file_lock_error(monkeypatch, tmp_path: Path) -> None:
+    _stub_preview_runtime(monkeypatch)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    monkeypatch.setattr(export, "_retry_unlink", lambda _path: False)
+
+    with pytest.raises(export.PreviewFileLockError):
+        export.create_preview_clip(source, tmp_path / "previews", "H001", 10.0, 12.0)
+
+
+def test_locked_preview_replace_raises_preview_file_lock_error(monkeypatch, tmp_path: Path) -> None:
+    _stub_preview_runtime(monkeypatch)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+
+    def fake_encode(_ffmpeg, _src, out, _start, _duration, *, preview=False) -> None:
+        assert preview is True
+        out.write_bytes(b"complete")
+
+    def locked_replace(_self: Path, _target: Path) -> Path:
+        raise PermissionError(32, "file is in use")
+
+    monkeypatch.setattr(export, "_run_h264_encode", fake_encode)
+    monkeypatch.setattr(Path, "replace", locked_replace)
+
+    with pytest.raises(export.PreviewFileLockError):
+        export.create_preview_clip(source, tmp_path / "previews", "H001", 10.0, 12.0)
+
+
+def test_ffmpeg_permission_error_is_not_misclassified_as_preview_lock(monkeypatch, tmp_path: Path) -> None:
+    _stub_preview_runtime(monkeypatch)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+
+    def denied_encode(*_args, **_kwargs) -> None:
+        raise PermissionError("FFmpeg executable is not permitted")
+
+    monkeypatch.setattr(export, "_run_h264_encode", denied_encode)
+
+    with pytest.raises(PermissionError) as exc_info:
+        export.create_preview_clip(source, tmp_path / "previews", "H001", 10.0, 12.0)
+
+    assert type(exc_info.value) is PermissionError
