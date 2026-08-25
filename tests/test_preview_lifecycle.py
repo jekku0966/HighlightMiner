@@ -11,6 +11,7 @@ from highlightminer import export
 def _stub_preview_runtime(monkeypatch) -> None:
     monkeypatch.setattr(export, "require_ffmpeg", lambda: None)
     monkeypatch.setattr(export, "require_executable", lambda _name: "ffmpeg")
+    monkeypatch.setattr(export, "probe_media", lambda _path: {"duration": 120.0})
 
 
 def test_preview_replacement_keeps_previous_file_until_encode_finishes(monkeypatch, tmp_path: Path) -> None:

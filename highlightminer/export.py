@@ -10,7 +10,8 @@ from pathlib import Path
 
 from .categorization import content_folder_name
 from .diagnostics import ffmpeg_failure, log_detailed, log_event, log_exception
-from .media import has_encoder, require_executable, require_ffmpeg
+from .media import has_encoder, probe_media, require_executable, require_ffmpeg
+from .timestamps import ClipBounds, normalize_clip_bounds
 from .util import ensure_dir
 
 _PREVIEW_CACHE_KEEP = 4
@@ -92,6 +93,19 @@ def _prune_preview_files(out_dir: Path, stem: str, *, keep_path: Path) -> int:
             failed_files=cleanup_failures,
         )
     return cleanup_failures
+
+
+def _source_clip_bounds(src: Path, start: float, end: float, *, operation: str, clip_id: str) -> ClipBounds:
+    source_duration = float(probe_media(src)["duration"])
+    bounds = normalize_clip_bounds(start, end, source_duration)
+    if bounds.meaningfully_invalid:
+        log_event(
+            "clip.bounds_normalized",
+            level=logging.WARNING,
+            operation=operation,
+            clip_id=safe_name(clip_id),
+        )
+    return bounds
 
 
 def _run_encode(command: list[str], *, encoder: str) -> None:
@@ -205,8 +219,9 @@ def create_preview_clip(
     src = Path(video_path).expanduser().resolve()
     out_dir = ensure_dir(output_dir)
 
-    start = max(0.0, float(start))
-    end = max(start + 0.1, float(end))
+    bounds = _source_clip_bounds(src, float(start), float(end), operation="preview", clip_id=clip_id)
+    start = bounds.start
+    end = bounds.end
     duration = end - start
 
     stem = safe_name(clip_id)
@@ -252,10 +267,11 @@ def export_clip(
     src = Path(video_path).expanduser().resolve()
     base_dir = ensure_dir(output_dir)
     out_dir = ensure_dir(base_dir / content_folder_name(category))
-    duration = max(0.1, float(end) - float(start))
+    bounds = _source_clip_bounds(src, float(start), float(end), operation="export", clip_id=clip_id)
+    duration = bounds.end - bounds.start
     stem = safe_name(f"{clip_id}_{title}" if title else clip_id)
     out = _non_overwriting_path(out_dir / f"{stem}.mp4")
 
-    _run_h264_encode(ffmpeg, src, out, float(start), duration, preview=False)
+    _run_h264_encode(ffmpeg, src, out, bounds.start, duration, preview=False)
     log_event("export.complete", count=1)
     return out

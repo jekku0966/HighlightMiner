@@ -17,6 +17,31 @@ def test_candidate_created_around_spike():
     assert result[0]["start"] <= 50 <= result[0]["end"]
 
 
+def test_candidate_end_rounding_never_exceeds_source_duration():
+    duration = 10.001859
+    settings = Settings(
+        min_candidate_score=0.8,
+        pre_roll_sec=0,
+        post_roll_sec=1,
+        merge_gap_sec=1,
+        reaction_phrases=[],
+    )
+    audio = [{"time": float(t), "score": 1.0 if t == 10 else 0.0} for t in range(11)]
+
+    result = find_candidates(
+        duration,
+        audio,
+        [],
+        [],
+        settings,
+        transcript_available=False,
+    )
+
+    assert result
+    assert result[0]["end"] == duration
+    assert 0.0 <= result[0]["start"] < result[0]["end"] <= duration
+
+
 def test_missing_transcript_renormalizes_available_signals():
     settings = Settings(
         min_candidate_score=0.5,

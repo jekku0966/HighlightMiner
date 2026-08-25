@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .config import Settings
+from .timestamps import normalize_clip_bounds
 from .util import clamp, format_time
 
 
@@ -132,6 +133,12 @@ def find_candidates(
         else:
             start, end = raw_start, raw_end
 
+        # Candidate times are displayed/stored at millisecond precision. Clamp
+        # after that rounding so the rounded representation can never exceed
+        # ffprobe's more precise source duration.
+        bounds = normalize_clip_bounds(round(start, 3), round(end, 3), duration)
+        start, end = bounds.start, bounds.end
+
         local = [x for x in timeline if start <= x.time <= end]
         max_audio = max((x.audio for x in local), default=0.0)
         max_tx = max((x.transcript for x in local), default=0.0) if transcript_available else 0.0
@@ -176,8 +183,8 @@ def find_candidates(
             "rank": 0,
             "score": round(score, 4),
             "peak_time": round(peak.time, 3),
-            "start": round(start, 3),
-            "end": round(end, 3),
+            "start": start,
+            "end": end,
             "start_label": format_time(start),
             "end_label": format_time(end),
             "audio_score": round(max_audio, 4),
