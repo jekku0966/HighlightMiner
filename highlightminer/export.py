@@ -208,6 +208,7 @@ def create_preview_clip(
     stem = safe_name(clip_id)
     signature = f"{start:.3f}_{end:.3f}".replace(".", "_")
     out = out_dir / f"{stem}_{signature}.mp4"
+    partial = out.with_name(f".{out.stem}.partial{out.suffix}")
 
     # Streamlit/browser video playback can keep an earlier preview open on
     # Windows. Never delete the currently displayed predecessor before the
@@ -217,7 +218,14 @@ def create_preview_clip(
             cleanup_failures = _prune_preview_files(out_dir, stem, keep_path=out)
             return PreviewClipResult(out, cleanup_failures)
 
-        _run_h264_encode(ffmpeg, src, out, start, duration, preview=True)
+        if not _retry_unlink(partial):
+            raise PermissionError("Could not remove an incomplete preview from an earlier attempt.")
+        try:
+            _run_h264_encode(ffmpeg, src, partial, start, duration, preview=True)
+            partial.replace(out)
+        except Exception:
+            _retry_unlink(partial)
+            raise
         cleanup_failures = _prune_preview_files(out_dir, stem, keep_path=out)
         return PreviewClipResult(out, cleanup_failures)
 

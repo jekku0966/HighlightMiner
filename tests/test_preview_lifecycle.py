@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from highlightminer import export
 
 
@@ -82,9 +84,38 @@ def test_preview_returns_locked_cleanup_count_with_successful_replacement(monkey
         out.write_bytes(b"new")
 
     monkeypatch.setattr(export, "_run_h264_encode", fake_encode)
-    monkeypatch.setattr(export, "_retry_unlink", lambda _path: False)
+    monkeypatch.setattr(export, "_retry_unlink", lambda path: path.name.startswith("."))
 
     result = export.create_preview_clip(source, preview_dir, "H001", 10.0, 12.0)
 
     assert result.path.read_bytes() == b"new"
     assert result.cleanup_failures == 1
+
+
+def test_failed_preview_encode_does_not_leave_a_cached_partial(monkeypatch, tmp_path: Path) -> None:
+    _stub_preview_runtime(monkeypatch)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    preview_dir = tmp_path / "previews"
+    encode_attempts = 0
+
+    def fake_encode(_ffmpeg, _src, out, _start, _duration, *, preview=False) -> None:
+        nonlocal encode_attempts
+        assert preview is True
+        encode_attempts += 1
+        out.write_bytes(b"partial" if encode_attempts == 1 else b"complete")
+        if encode_attempts == 1:
+            raise RuntimeError("encode failed")
+
+    monkeypatch.setattr(export, "_run_h264_encode", fake_encode)
+
+    with pytest.raises(RuntimeError, match="encode failed"):
+        export.create_preview_clip(source, preview_dir, "H001", 10.0, 12.0)
+
+    assert not list(preview_dir.glob("H001_*.mp4"))
+    assert not list(preview_dir.glob(".*.partial.mp4"))
+
+    result = export.create_preview_clip(source, preview_dir, "H001", 10.0, 12.0)
+
+    assert encode_attempts == 2
+    assert result.path.read_bytes() == b"complete"
