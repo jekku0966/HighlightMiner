@@ -32,6 +32,7 @@ def test_export_clip_uses_content_subfolder(tmp_path: Path, monkeypatch) -> None
 
     monkeypatch.setattr(export_module, "require_ffmpeg", lambda: None)
     monkeypatch.setattr(export_module, "require_executable", lambda _: "ffmpeg")
+    monkeypatch.setattr(export_module, "probe_media", lambda _path: {"duration": 120.0})
 
     def fake_encode(ffmpeg, src, out, start, duration, *, preview=False):
         out.write_bytes(b"clip")
