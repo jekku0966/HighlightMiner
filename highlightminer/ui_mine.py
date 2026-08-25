@@ -6,7 +6,7 @@ import streamlit as st
 
 from .analysis_identity import load_analysis_identities, load_analysis_identity, save_analysis_title
 from .categorization import normalize_content_label
-from .export import create_preview_clip, export_clip
+from .export import PreviewFileLockError, create_preview_clip, export_clip
 from .model_access import (
     ModelAccessPreferences,
     ModelDecisionRequired,
@@ -40,6 +40,8 @@ _PENDING_MODEL_ANALYSIS_KEY = "pending_model_analysis"
 _PENDING_RERUN_KEY = "pending_rerun"
 _QUEUED_ANALYSIS_KEY = "queued_analysis"
 _ANALYSIS_RUNNING_KEY = "analysis_running"
+_PREVIEW_ACTIVE_KEY = "preview_active_candidate"
+_PREVIEW_CLOSED_KEY = "preview_closed"
 
 
 def analysis_is_running() -> bool:
@@ -411,23 +413,66 @@ def _render_review(db_path: Path) -> None:
     candidate = candidates[labels.index(selected_label)]
     item = review["items"][candidate["id"]]
 
+    preview_token = f"{analysis_id}:{candidate['id']}"
+    candidate_changed = st.session_state.get(_PREVIEW_ACTIVE_KEY) != preview_token
+    if candidate_changed:
+        st.session_state[_PREVIEW_ACTIVE_KEY] = preview_token
+        st.session_state[_PREVIEW_CLOSED_KEY] = False
+
     st.subheader(f"🎞️ {candidate['id']} — {candidate['reason']}")
-    left, right = st.columns(2)
-    with left:
-        start = st.number_input("Clip start (seconds)", min_value=0.0, max_value=float(analysis["duration"]), value=float(item["start"]), step=1.0, key=f"start_{analysis_id}_{candidate['id']}")
-    with right:
-        end = st.number_input("Clip end (seconds)", min_value=0.1, max_value=float(analysis["duration"]), value=float(item["end"]), step=1.0, key=f"end_{analysis_id}_{candidate['id']}")
+    with st.form(f"clip_timing_form_{analysis_id}_{candidate['id']}"):
+        left, right = st.columns(2)
+        with left:
+            start = st.number_input("Clip start (seconds)", min_value=0.0, max_value=float(analysis["duration"]), value=float(item["start"]), step=1.0, key=f"start_{analysis_id}_{candidate['id']}")
+        with right:
+            end = st.number_input("Clip end (seconds)", min_value=0.1, max_value=float(analysis["duration"]), value=float(item["end"]), step=1.0, key=f"end_{analysis_id}_{candidate['id']}")
+        update_preview = st.form_submit_button("Update preview", type="primary", width="stretch")
+
+    if update_preview:
+        st.session_state[_PREVIEW_CLOSED_KEY] = False
+
     preview_end = max(float(end), float(start) + 0.1)
     preview_dir = Path(analysis["work_dir"]) / ".previews" / analysis_id
-    try:
-        source_video = validate_local_video(analysis["video_path"])
-        with st.spinner("Preparing lightweight preview…"):
-            preview_path = create_preview_clip(source_video, preview_dir, candidate["id"], float(start), preview_end)
-        st.video(str(preview_path), width=640)
-        st.caption(f"Local preview only: {format_time(float(start))} → {format_time(preview_end)}. The full source VOD is never sent to the UI player.")
-    except Exception as exc:
-        st.error("Could not build the lightweight preview clip. The stored source path may have moved or failed validation.")
-        st.exception(exc)
+    preview_slot = st.empty()
+    if candidate_changed or update_preview:
+        preview_slot.empty()
+
+    preview_closed = bool(st.session_state.get(_PREVIEW_CLOSED_KEY, False))
+    if not preview_closed:
+        try:
+            source_video = validate_local_video(analysis["video_path"])
+        except Exception as exc:
+            st.error("Could not open the source VOD. Check that the local file still exists and is readable.")
+            st.exception(exc)
+        else:
+            try:
+                with st.spinner("Preparing lightweight preview…"):
+                    preview = create_preview_clip(source_video, preview_dir, candidate["id"], float(start), preview_end)
+                preview_slot.video(str(preview.path), width=640)
+                st.caption(f"Local preview only: {format_time(float(start))} → {format_time(preview_end)}. The full source VOD is never sent to the UI player.")
+                if preview.cleanup_failures:
+                    st.warning(
+                        "Preview ready, but Windows is still holding "
+                        f"{preview.cleanup_failures} older temporary preview file(s). "
+                        "Cleanup will be retried the next time this preview is updated."
+                    )
+            except PreviewFileLockError as exc:
+                st.error(
+                    "Windows could not remove or replace a temporary preview file. "
+                    "Close any program using the preview folder and try **Update preview** again."
+                )
+                st.exception(exc)
+            except Exception as exc:
+                st.error("Could not build the lightweight preview clip. Check the local preview folder and FFmpeg setup.")
+                st.exception(exc)
+    else:
+        preview_slot.empty()
+        st.caption("Preview closed. Use **Update preview** to load it again.")
+
+    if st.button("Close preview", disabled=preview_closed, key=f"close_preview_{analysis_id}_{candidate['id']}"):
+        st.session_state[_PREVIEW_CLOSED_KEY] = True
+        preview_slot.empty()
+        st.rerun()
 
     title = st.text_input("Optional clip title", value=item.get("title", ""), key=f"title_{analysis_id}_{candidate['id']}")
     st.caption(f"Signals — audio {candidate['audio_score']:.2f} · transcript {candidate['transcript_score']:.2f} · chat {candidate['chat_score']:.2f}")
