@@ -172,6 +172,7 @@ def _run_queued_analysis(db_path: Path) -> None:
     except ModelDecisionRequired as exc:
         _queue_model_decision(exc, **queued)
     except AnalysisJobTerminalError as exc:
+        _clear_pending_analysis_state()
         job = exc.job
         if job["status"] == "completed" and job.get("analysis_id"):
             st.session_state.analysis_id = job["analysis_id"]

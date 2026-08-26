@@ -113,6 +113,8 @@ def test_terminal_model_decision_race_does_not_leave_pending_prompt(monkeypatch,
     state = {
         ui_mine._QUEUED_ANALYSIS_KEY: {"video_path": "vod.mp4"},
         ui_mine._ANALYSIS_RUNNING_KEY: True,
+        ui_mine._PENDING_MODEL_ANALYSIS_KEY: {"analysis_job_id": "job-123"},
+        ui_mine._PENDING_RERUN_KEY: {"source": {"id": "source-123"}},
     }
     terminal = AnalysisJobTerminalError(
         {
@@ -134,4 +136,5 @@ def test_terminal_model_decision_race_does_not_leave_pending_prompt(monkeypatch,
 
     assert state["analysis_notice"] == "Analysis was cancelled."
     assert ui_mine._PENDING_MODEL_ANALYSIS_KEY not in state
+    assert ui_mine._PENDING_RERUN_KEY not in state
     assert ui_mine._QUEUED_ANALYSIS_KEY not in state
