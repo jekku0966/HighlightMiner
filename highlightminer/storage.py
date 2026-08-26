@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -488,10 +489,28 @@ def save_analysis(
     source: dict[str, Any] | None = None,
     signatures: dict[str, str] | None = None,
     cache_info: dict[str, Any] | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> str:
     analysis_id = analysis_id or uuid.uuid4().hex
     video = validate_local_video(analysis["video_path"])
-    source_row = register_source(db_path, source or describe_source(video))
+    owns_connection = connection is None
+    if owns_connection:
+        source_row = register_source(db_path, source or describe_source(video))
+    else:
+        if source is None or not source.get("id"):
+            raise ValueError("An existing source is required for transactional analysis saves.")
+        persisted_source = connection.execute(
+            "SELECT id, fingerprint FROM sources WHERE id = ?",
+            (str(source["id"]),),
+        ).fetchone()
+        if persisted_source is None:
+            raise KeyError(f"Source not found: {source['id']}")
+        if str(persisted_source["fingerprint"]) != str(source["fingerprint"]):
+            raise ValueError("The source ID and fingerprint do not identify the same source.")
+        source_row = {
+            "id": str(persisted_source["id"]),
+            "fingerprint": str(persisted_source["fingerprint"]),
+        }
     content_label = normalize_content_label(analysis.get("content_label"))
     created_at = utc_now()
     signatures = signatures or {}
@@ -502,7 +521,8 @@ def save_analysis(
     audio_rows = list(audio_features)
     chat_rows = list(chat_features)
 
-    with connect(db_path) as conn:
+    connection_scope = connect(db_path) if owns_connection else nullcontext(connection)
+    with connection_scope as conn:
         run_number = int(
             conn.execute(
                 "SELECT COALESCE(MAX(run_number), 0) + 1 FROM analyses WHERE source_id = ?",
@@ -636,7 +656,8 @@ def save_analysis(
                 for i, row in enumerate(chat_rows)
             ],
         )
-        conn.commit()
+        if owns_connection:
+            conn.commit()
     return analysis_id
 
 

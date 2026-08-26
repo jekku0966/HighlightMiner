@@ -306,3 +306,65 @@ def test_model_decision_race_preserves_concurrent_terminal_state(tmp_path: Path,
     assert raised.value.job["status"] == "interrupted"
     assert load_analysis_job(db, raised.value.job["id"])["status"] == "interrupted"
     assert list_analysis_job_events(db, raised.value.job["id"])[-1]["event"] == "job.interrupted"
+
+
+def test_finalization_race_rolls_back_unlinked_analysis(tmp_path: Path, monkeypatch) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"video")
+    db = tmp_path / "highlightminer.db"
+    _stub_pipeline(monkeypatch)
+    real_save_analysis = pipeline.save_analysis
+
+    def interrupt_then_save(db_path, *args, **kwargs):
+        with connect(db_path) as inspection:
+            job_id = str(inspection.execute("SELECT id FROM analysis_jobs").fetchone()[0])
+        assert interrupt_analysis_job(
+            db_path,
+            job_id,
+            message="Worker lease expired during finalization",
+        ) is True
+        return real_save_analysis(db_path, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "save_analysis", interrupt_then_save)
+
+    with pytest.raises(AnalysisJobTerminalError) as raised:
+        pipeline.analyze_vod(
+            video,
+            tmp_path,
+            Settings(),
+            db_path=db,
+            reuse_features=False,
+            skip_transcription=True,
+        )
+
+    assert raised.value.job["status"] == "interrupted"
+    assert raised.value.job["analysis_id"] is None
+    with connect(db) as inspection:
+        assert inspection.execute("SELECT COUNT(*) FROM analyses").fetchone()[0] == 0
+
+
+def test_completion_callback_failure_does_not_reclassify_success(tmp_path: Path, monkeypatch) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"video")
+    db = tmp_path / "highlightminer.db"
+    _stub_pipeline(monkeypatch)
+
+    def progress(_message: str, value: float) -> None:
+        if value == 1.0:
+            raise RuntimeError("status widget disappeared")
+
+    analysis_id = pipeline.analyze_vod(
+        video,
+        tmp_path,
+        Settings(),
+        progress=progress,
+        db_path=db,
+        reuse_features=False,
+        skip_transcription=True,
+    )
+
+    with connect(db) as inspection:
+        job_id = str(inspection.execute("SELECT id FROM analysis_jobs").fetchone()[0])
+    completed = load_analysis_job(db, job_id)
+    assert completed["status"] == "completed"
+    assert completed["analysis_id"] == analysis_id

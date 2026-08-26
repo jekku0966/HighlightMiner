@@ -60,6 +60,7 @@ from .security import validate_chat_file, validate_local_video
 from .storage import (
     ALGORITHM_VERSION,
     FEATURE_SCHEMA_VERSION,
+    connect,
     load_reusable_features,
     register_source,
     save_analysis,
@@ -655,35 +656,52 @@ def analyze_vod(
         save_signatures: dict[str, str | None] = dict(signatures)
         if transcription_skipped:
             save_signatures["transcript"] = None
-        log_detailed("database.operation", operation="save_analysis")
-        database_save_started_at = time.perf_counter()
-        with diagnostic_stage("database_save"):
-            analysis_id = save_analysis(
-                db_path,
-                analysis,
-                transcript,
-                list(audio_features or []),
-                list(chat_features or []),
-                work_dir=work,
-                source=source,
-                signatures=save_signatures,
-                cache_info=cache_info,
-            )
-        timings["database_save_seconds"] = _elapsed_since(database_save_started_at)
-        timings["pipeline_elapsed_seconds"] = _elapsed_since(pipeline_started_at)
         reused = ", ".join(sorted(cache_from))
         suffix = f" · reused {reused}" if reused else ""
         if transcription_skipped:
             suffix += " · no transcript"
         completion_message = f"Done — {len(candidates)} candidates{suffix}"
-        complete_analysis_job(
-            db_path,
-            job_id,
-            analysis_id,
-            message=completion_message,
-            timings=timings,
-        )
-        user_progress(completion_message, 1.0)
+        log_detailed("database.operation", operation="save_analysis")
+        database_save_started_at = time.perf_counter()
+        try:
+            with connect(db_path) as transaction:
+                with diagnostic_stage("database_save"):
+                    analysis_id = save_analysis(
+                        db_path,
+                        analysis,
+                        transcript,
+                        list(audio_features or []),
+                        list(chat_features or []),
+                        work_dir=work,
+                        source=source,
+                        signatures=save_signatures,
+                        cache_info=cache_info,
+                        connection=transaction,
+                    )
+                timings["database_save_seconds"] = _elapsed_since(database_save_started_at)
+                timings["pipeline_elapsed_seconds"] = _elapsed_since(pipeline_started_at)
+                complete_analysis_job(
+                    db_path,
+                    job_id,
+                    analysis_id,
+                    message=completion_message,
+                    timings=timings,
+                    connection=transaction,
+                )
+        except AnalysisJobStateError:
+            current_job = load_analysis_job(db_path, job_id)
+            if current_job["status"] in TERMINAL_ANALYSIS_JOB_STATUSES:
+                raise AnalysisJobTerminalError(current_job) from None
+            raise
+        try:
+            user_progress(completion_message, 1.0)
+        except Exception as exc:
+            log_exception(
+                "analysis.completion_callback_error",
+                exc,
+                job_id=job_id,
+                analysis_id=analysis_id,
+            )
         log_event(
             "analysis.complete",
             duration_seconds=_elapsed_since(pipeline_started_at),
@@ -709,6 +727,14 @@ def analyze_vod(
                     raise
             setattr(exc, "analysis_job_id", job_id)
         log_event("analysis.model_decision_required", level=logging.WARNING, job_id=job_id)
+        raise
+    except AnalysisJobTerminalError as exc:
+        log_event(
+            "analysis.terminal_race",
+            level=logging.WARNING,
+            job_id=job_id,
+            terminal_status=exc.job["status"],
+        )
         raise
     except Exception as exc:
         if job_id is not None and (job_created or job_started or resumable_job_loaded):

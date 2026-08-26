@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -364,9 +365,11 @@ def complete_analysis_job(
     *,
     message: str = "Analysis complete",
     timings: dict[str, float] | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> dict[str, Any]:
     now = utc_now()
-    with connect(db_path) as conn:
+    connection_scope = connect(db_path) if connection is None else nullcontext(connection)
+    with connection_scope as conn:
         current = _row_for_job(conn, job_id)
         if current["status"] != "running":
             raise AnalysisJobStateError(
