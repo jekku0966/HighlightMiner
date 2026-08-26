@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from highlightminer.scoring import deduplicate_candidates
+from highlightminer.config import Settings
+from highlightminer.scoring import deduplicate_candidates, find_candidates
 
 
 def _candidate(
@@ -106,3 +107,37 @@ def test_duplicate_detection_handles_source_boundaries() -> None:
 
     assert [candidate["id"] for candidate in kept] == ["start-strong", "end-strong"]
 
+
+def test_duplicate_accounting_continues_past_output_limit() -> None:
+    candidates = [
+        _candidate("strong", 10.0, 40.0, 25.0, 0.95),
+        _candidate("medium", 11.0, 39.0, 24.5, 0.80),
+        _candidate("weak", 9.0, 41.0, 25.5, 0.60),
+    ]
+
+    kept = deduplicate_candidates(candidates, max_candidates=1)
+
+    assert [candidate["id"] for candidate in kept] == ["strong"]
+    assert kept[0]["features"]["duplicates_suppressed"] == 2
+
+
+def test_find_candidates_deduplicates_groups_just_beyond_merge_gap() -> None:
+    settings = Settings(
+        min_candidate_score=0.9,
+        audio_window_sec=1.0,
+        audio_hop_sec=1.0,
+        pre_roll_sec=20.0,
+        post_roll_sec=20.0,
+        merge_gap_sec=10.0,
+        weights={"audio": 1.0, "transcript": 0.0, "chat": 0.0},
+        reaction_phrases=[],
+    )
+    audio = [
+        {"time": float(second), "score": 1.0 if second in {30, 41} else 0.0}
+        for second in range(80)
+    ]
+
+    kept = find_candidates(80.0, audio, [], [], settings, transcript_available=False)
+
+    assert len(kept) == 1
+    assert kept[0]["features"]["duplicates_suppressed"] == 1
