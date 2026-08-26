@@ -4,6 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from .analysis_jobs import cancel_analysis_job
 from .analysis_identity import load_analysis_identities, load_analysis_identity, save_analysis_title
 from .categorization import normalize_content_label
 from .export import PreviewFileLockError, create_preview_clip, export_clip
@@ -107,6 +108,7 @@ def _run_analysis_ui(
     reuse_features: bool = True,
     allow_model_download: bool = False,
     skip_transcription: bool = False,
+    analysis_job_id: str | None = None,
 ) -> str:
     settings = load_app_settings(db_path)
     with st.status("Analyzing…", expanded=True) as status:
@@ -129,6 +131,7 @@ def _run_analysis_ui(
             reuse_features=reuse_features,
             allow_model_download=allow_model_download,
             skip_transcription=skip_transcription,
+            analysis_job_id=analysis_job_id,
         )
         save_analysis_title(db_path, analysis_id, analysis_title)
     analysis = load_analysis(db_path, analysis_id)
@@ -163,10 +166,14 @@ def _run_queued_analysis(db_path: Path) -> None:
 
 
 def _queue_model_decision(exc: ModelDecisionRequired, **analysis_args) -> None:
-    st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = {
+    pending = {
         **analysis_args,
         "message": str(exc),
     }
+    analysis_job_id = getattr(exc, "analysis_job_id", None)
+    if analysis_job_id:
+        pending["analysis_job_id"] = str(analysis_job_id)
+    st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = pending
 
 
 def _resume_pending_model_analysis(
@@ -227,8 +234,12 @@ def _render_model_decision(db_path: Path) -> bool:
             set_model_download_consent("deny", db_path)
             _resume_pending_model_analysis(db_path, skip_transcription=True)
         if st.button("Cancel analysis", width="stretch"):
-            _clear_pending_analysis_state()
-            st.rerun()
+            job_id = pending.get("analysis_job_id")
+            if not job_id or cancel_analysis_job(db_path, str(job_id)):
+                _clear_pending_analysis_state()
+                st.rerun()
+            else:
+                st.error("This analysis is already running and cannot be cancelled safely.")
     return True
 
 

@@ -13,7 +13,7 @@ from .runtime import app_root
 from .security import validate_legacy_analysis_file, validate_local_video
 from .util import load_json
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 FEATURE_SCHEMA_VERSION = 2
 ALGORITHM_VERSION = "heuristic-v1"
 DATABASE_FILENAME = "highlightminer.db"
@@ -187,6 +187,44 @@ def initialize(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (analysis_id, seq),
             FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS analysis_jobs (
+            id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            source_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL
+                CHECK (status IN (
+                    'queued', 'running', 'awaiting_input',
+                    'completed', 'failed', 'cancelled', 'interrupted'
+                )),
+            stage TEXT NOT NULL,
+            progress REAL NOT NULL DEFAULT 0.0
+                CHECK (progress >= 0.0 AND progress <= 1.0),
+            message TEXT NOT NULL DEFAULT '',
+            config_json TEXT NOT NULL,
+            timings_json TEXT NOT NULL DEFAULT '{}',
+            analysis_id TEXT,
+            error_type TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT,
+            FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE,
+            FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS analysis_job_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            level TEXT NOT NULL CHECK (level IN ('info', 'warning', 'error')),
+            event TEXT NOT NULL,
+            stage TEXT,
+            message TEXT NOT NULL DEFAULT '',
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (job_id) REFERENCES analysis_jobs(id) ON DELETE CASCADE
+        );
         """
     )
 
@@ -228,6 +266,22 @@ def initialize(conn: sqlite3.Connection) -> None:
             ON analyses(source_id, transcript_signature, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_analyses_chat_cache
             ON analyses(source_id, chat_signature, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_analysis_jobs_updated
+            ON analysis_jobs(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_analysis_job_events_job
+            ON analysis_job_events(job_id, id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_jobs_active_source_id
+            ON analysis_jobs(source_id)
+            WHERE status IN ('queued', 'running', 'awaiting_input');
+
+        CREATE TRIGGER IF NOT EXISTS prevent_analysis_job_config_mutation
+        BEFORE UPDATE OF source_id, source_fingerprint, config_json ON analysis_jobs
+        WHEN NEW.source_id <> OLD.source_id
+          OR NEW.source_fingerprint <> OLD.source_fingerprint
+          OR NEW.config_json <> OLD.config_json
+        BEGIN
+            SELECT RAISE(ABORT, 'analysis job configuration is immutable');
+        END;
         """
     )
     conn.execute(

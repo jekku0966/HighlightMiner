@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from highlightminer import pipeline
+from highlightminer.analysis_jobs import list_analysis_job_events, load_analysis_job
 from highlightminer.config import Settings
-from highlightminer.model_access import PreparedModelReference
+from highlightminer.model_access import ModelAccessPreferences, PreparedModelReference
+from highlightminer.storage import connect
 
 
 def test_pipeline_records_stage_timings_and_maps_transcription_progress(tmp_path: Path, monkeypatch) -> None:
@@ -15,7 +17,11 @@ def test_pipeline_records_stage_timings_and_maps_transcription_progress(tmp_path
 
     monkeypatch.setattr(pipeline, "validate_local_video", lambda path: Path(path))
     monkeypatch.setattr(pipeline, "ensure_dir", lambda path: Path(path))
-    monkeypatch.setattr(pipeline, "load_model_access", lambda _db: object())
+    monkeypatch.setattr(
+        pipeline,
+        "load_model_access",
+        lambda _db: ModelAccessPreferences(download_consent="deny"),
+    )
     monkeypatch.setattr(
         pipeline,
         "describe_source",
@@ -24,17 +30,6 @@ def test_pipeline_records_stage_timings_and_maps_transcription_progress(tmp_path
             "path": str(path),
             "video_name": Path(path).name,
             "file_size": 4,
-        },
-    )
-    monkeypatch.setattr(
-        pipeline,
-        "register_source",
-        lambda _db, source: {
-            "id": "source-id",
-            "fingerprint": source["fingerprint"],
-            "path": source["path"],
-            "video_name": source["video_name"],
-            "file_size": source["file_size"],
         },
     )
     monkeypatch.setattr(
@@ -93,10 +88,12 @@ def test_pipeline_records_stage_timings_and_maps_transcription_progress(tmp_path
 
         monkeypatch.setattr(pipeline, "prepare_preference_model", fail_learning)
 
+    real_save_analysis = pipeline.save_analysis
+
     def fake_save_analysis(_db, analysis, _transcript, _audio, _chat, **kwargs):
         captured["analysis"] = analysis
         captured["cache_info"] = kwargs["cache_info"]
-        return "analysis-id"
+        return real_save_analysis(_db, analysis, _transcript, _audio, _chat, **kwargs)
 
     monkeypatch.setattr(pipeline, "save_analysis", fake_save_analysis)
 
@@ -109,7 +106,7 @@ def test_pipeline_records_stage_timings_and_maps_transcription_progress(tmp_path
         reuse_features=False,
     )
 
-    assert analysis_id == "analysis-id"
+    assert analysis_id
     assert any(
         message.startswith("Transcribing — GPU") and abs(value - 0.54) < 1e-9
         for message, value in progress_updates
@@ -132,3 +129,12 @@ def test_pipeline_records_stage_timings_and_maps_transcription_progress(tmp_path
     assert transcription["device"] == "cuda"
     assert transcription["elapsed_seconds"] == 2.0
     assert transcription["real_time_factor"] == 0.02
+
+    with connect(tmp_path / "highlightminer.db") as conn:
+        job_id = str(conn.execute("SELECT id FROM analysis_jobs").fetchone()[0])
+    job = load_analysis_job(tmp_path / "highlightminer.db", job_id)
+    assert job["status"] == "completed"
+    assert job["analysis_id"] == analysis_id
+    assert job["config"]["settings"]["device"] == "auto"
+    assert job["timings"]["database_save_seconds"] >= 0.0
+    assert list_analysis_job_events(tmp_path / "highlightminer.db", job_id)[-1]["event"] == "job.completed"

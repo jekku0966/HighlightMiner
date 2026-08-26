@@ -1,4 +1,6 @@
+from highlightminer import ui_mine
 from highlightminer.config import Settings
+from highlightminer.model_access import ModelDecisionRequired
 from highlightminer.ui_common import (
     hydrate_persistent_widget,
     persist_widget_value,
@@ -61,3 +63,16 @@ def test_default_model_is_first_and_legacy_aliases_use_advanced_editor() -> None
         _ADVANCED_WHISPER_MODEL,
         "base.en",
     )
+
+
+def test_model_decision_keeps_persistent_job_identity(monkeypatch) -> None:
+    state: dict[str, object] = {}
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    error = ModelDecisionRequired("Choose a model")
+    error.analysis_job_id = "job-123"
+
+    ui_mine._queue_model_decision(error, video_path="vod.mp4")
+
+    pending = state[ui_mine._PENDING_MODEL_ANALYSIS_KEY]
+    assert pending["analysis_job_id"] == "job-123"
+    assert pending["video_path"] == "vod.mp4"
