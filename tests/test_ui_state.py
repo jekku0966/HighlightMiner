@@ -76,3 +76,33 @@ def test_model_decision_keeps_persistent_job_identity(monkeypatch) -> None:
     pending = state[ui_mine._PENDING_MODEL_ANALYSIS_KEY]
     assert pending["analysis_job_id"] == "job-123"
     assert pending["video_path"] == "vod.mp4"
+
+
+def test_cancel_pending_job_distinguishes_terminal_state(monkeypatch, tmp_path) -> None:
+    completed = {"status": "completed", "analysis_id": "analysis-123"}
+    monkeypatch.setattr(ui_mine, "cancel_analysis_job", lambda _db, _job: False)
+    monkeypatch.setattr(ui_mine, "load_analysis_job", lambda _db, _job: completed)
+
+    outcome, job = ui_mine._cancel_pending_analysis_job(
+        tmp_path / "highlightminer.db",
+        "job-123",
+    )
+
+    assert outcome == "completed"
+    assert job == completed
+
+
+def test_cancel_pending_job_clears_missing_job(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        ui_mine,
+        "cancel_analysis_job",
+        lambda _db, _job: (_ for _ in ()).throw(KeyError("gone")),
+    )
+
+    outcome, job = ui_mine._cancel_pending_analysis_job(
+        tmp_path / "highlightminer.db",
+        "job-123",
+    )
+
+    assert outcome == "missing"
+    assert job is None

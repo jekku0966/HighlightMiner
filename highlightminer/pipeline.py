@@ -229,6 +229,7 @@ def analyze_vod(
     stored_job_config: dict | None = None
     job_created = False
     job_started = False
+    resumable_job_loaded = False
     pipeline_started_at = time.perf_counter()
     timings: dict[str, float] = {}
     wav: Path | None = None
@@ -237,6 +238,7 @@ def analyze_vod(
     try:
         if job_id is not None:
             existing_job = load_analysis_job(db_path, job_id)
+            resumable_job_loaded = existing_job["status"] in {"queued", "awaiting_input"}
             stored_job_config, settings = _restore_analysis_job_config(existing_job)
             video_path = str(stored_job_config["video_path"])
             work_dir = str(stored_job_config["work_dir"])
@@ -640,7 +642,7 @@ def analyze_vod(
         log_event("analysis.model_decision_required", level=logging.WARNING, job_id=job_id)
         raise
     except Exception as exc:
-        if job_id is not None and (job_created or job_started):
+        if job_id is not None and (job_created or job_started or resumable_job_loaded):
             timings["pipeline_elapsed_seconds"] = _elapsed_since(pipeline_started_at)
             fail_analysis_job(db_path, job_id, exc, timings=timings)
         log_exception(

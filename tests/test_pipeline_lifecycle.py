@@ -177,3 +177,43 @@ def test_duplicate_caller_cannot_fail_an_existing_running_job(tmp_path: Path, mo
         )
 
     assert load_analysis_job(db, job["id"])["status"] == "running"
+
+
+def test_precreated_job_fails_cleanly_if_startup_validation_fails(tmp_path: Path) -> None:
+    video = tmp_path / "source.mp4"
+    video.write_bytes(b"video")
+    missing_video = tmp_path / "missing.mp4"
+    db = tmp_path / "highlightminer.db"
+    source = register_source(
+        db,
+        {
+            "fingerprint": "source-fingerprint",
+            "path": str(video),
+            "video_name": video.name,
+            "file_size": video.stat().st_size,
+        },
+    )
+    config = pipeline.snapshot_analysis_config(
+        video=missing_video,
+        work=tmp_path,
+        settings=Settings(),
+        chat_path=None,
+        content_label="Other",
+        source_fingerprint="source-fingerprint",
+        reuse_features=True,
+        transcription_requested=True,
+    )
+    job = create_analysis_job(db, source, config)
+
+    with pytest.raises(FileNotFoundError):
+        pipeline.analyze_vod(
+            missing_video,
+            tmp_path,
+            Settings(),
+            db_path=db,
+            analysis_job_id=job["id"],
+        )
+
+    failed = load_analysis_job(db, job["id"])
+    assert failed["status"] == "failed"
+    assert failed["error_type"] == "FileNotFoundError"
