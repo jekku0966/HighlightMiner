@@ -31,6 +31,16 @@ class ActiveAnalysisJobError(AnalysisJobStateError):
         )
 
 
+class AnalysisJobTerminalError(AnalysisJobStateError):
+    """A concurrent transition ended a job before the current worker could continue."""
+
+    def __init__(self, job: dict[str, Any]):
+        self.job = dict(job)
+        super().__init__(
+            f"Analysis job {job['id']} reached terminal state {job['status']}."
+        )
+
+
 def _encode(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 

@@ -1,4 +1,5 @@
 from highlightminer import ui_mine
+from highlightminer.analysis_jobs import AnalysisJobTerminalError
 from highlightminer.config import Settings
 from highlightminer.model_access import ModelDecisionRequired
 from highlightminer.ui_common import (
@@ -106,3 +107,31 @@ def test_cancel_pending_job_clears_missing_job(monkeypatch, tmp_path) -> None:
 
     assert outcome == "missing"
     assert job is None
+
+
+def test_terminal_model_decision_race_does_not_leave_pending_prompt(monkeypatch, tmp_path) -> None:
+    state = {
+        ui_mine._QUEUED_ANALYSIS_KEY: {"video_path": "vod.mp4"},
+        ui_mine._ANALYSIS_RUNNING_KEY: True,
+    }
+    terminal = AnalysisJobTerminalError(
+        {
+            "id": "job-123",
+            "status": "cancelled",
+            "analysis_id": None,
+            "message": "Analysis cancelled",
+        }
+    )
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    monkeypatch.setattr(ui_mine.st, "rerun", lambda: None)
+
+    def raise_terminal(**_kwargs):
+        raise terminal
+
+    monkeypatch.setattr(ui_mine, "_run_analysis_ui", raise_terminal)
+
+    ui_mine._run_queued_analysis(tmp_path / "highlightminer.db")
+
+    assert state["analysis_notice"] == "Analysis was cancelled."
+    assert ui_mine._PENDING_MODEL_ANALYSIS_KEY not in state
+    assert ui_mine._QUEUED_ANALYSIS_KEY not in state

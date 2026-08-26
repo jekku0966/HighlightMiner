@@ -7,7 +7,9 @@ import pytest
 from highlightminer import pipeline
 from highlightminer.analysis_jobs import (
     AnalysisJobStateError,
+    AnalysisJobTerminalError,
     create_analysis_job,
+    interrupt_analysis_job,
     list_analysis_job_events,
     load_analysis_job,
     start_analysis_job,
@@ -266,3 +268,41 @@ def test_resume_preserves_snapshot_that_disabled_transcription(tmp_path: Path, m
     events = [event["event"] for event in list_analysis_job_events(db, job["id"])]
     assert "transcription.skip_requested" in events
     assert "transcription.skipped" in events
+
+
+def test_model_decision_race_preserves_concurrent_terminal_state(tmp_path: Path, monkeypatch) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"video")
+    db = tmp_path / "highlightminer.db"
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(
+        pipeline,
+        "resolve_model_reference",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ModelDecisionRequired("Choose how to continue")
+        ),
+    )
+    real_mark_awaiting = pipeline.mark_analysis_job_awaiting_input
+
+    def interrupt_before_awaiting(db_path, job_id, *, message):
+        interrupt_analysis_job(db_path, job_id, message="Worker ownership was lost")
+        return real_mark_awaiting(db_path, job_id, message=message)
+
+    monkeypatch.setattr(
+        pipeline,
+        "mark_analysis_job_awaiting_input",
+        interrupt_before_awaiting,
+    )
+
+    with pytest.raises(AnalysisJobTerminalError) as raised:
+        pipeline.analyze_vod(
+            video,
+            tmp_path,
+            Settings(),
+            db_path=db,
+            reuse_features=False,
+        )
+
+    assert raised.value.job["status"] == "interrupted"
+    assert load_analysis_job(db, raised.value.job["id"])["status"] == "interrupted"
+    assert list_analysis_job_events(db, raised.value.job["id"])[-1]["event"] == "job.interrupted"

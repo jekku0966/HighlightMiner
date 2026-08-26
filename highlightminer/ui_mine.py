@@ -4,7 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from .analysis_jobs import cancel_analysis_job, load_analysis_job
+from .analysis_jobs import AnalysisJobTerminalError, cancel_analysis_job, load_analysis_job
 from .analysis_identity import load_analysis_identities, load_analysis_identity, save_analysis_title
 from .categorization import normalize_content_label
 from .export import PreviewFileLockError, create_preview_clip, export_clip
@@ -171,6 +171,19 @@ def _run_queued_analysis(db_path: Path) -> None:
         st.session_state.analysis_id = _run_analysis_ui(db_path=db_path, **queued)
     except ModelDecisionRequired as exc:
         _queue_model_decision(exc, **queued)
+    except AnalysisJobTerminalError as exc:
+        job = exc.job
+        if job["status"] == "completed" and job.get("analysis_id"):
+            st.session_state.analysis_id = job["analysis_id"]
+            st.session_state["analysis_notice"] = "Analysis had already completed."
+        elif job["status"] == "cancelled":
+            st.session_state["analysis_notice"] = "Analysis was cancelled."
+        else:
+            st.session_state["analysis_error"] = str(
+                job.get("error_message")
+                or job.get("message")
+                or f"Analysis {job['status']}."
+            )
     except Exception as exc:
         st.session_state["analysis_error"] = f"{type(exc).__name__}: {exc}"
     finally:

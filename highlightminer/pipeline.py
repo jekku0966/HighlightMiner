@@ -10,7 +10,9 @@ from typing import Callable
 
 from .analysis_jobs import (
     ANALYSIS_JOB_HEARTBEAT_INTERVAL_SECONDS,
+    TERMINAL_ANALYSIS_JOB_STATUSES,
     AnalysisJobStateError,
+    AnalysisJobTerminalError,
     create_analysis_job,
     complete_analysis_job,
     fail_analysis_job,
@@ -691,7 +693,20 @@ def analyze_vod(
         return analysis_id
     except ModelDecisionRequired as exc:
         if job_id is not None and job_started:
-            mark_analysis_job_awaiting_input(db_path, job_id, message=str(exc))
+            try:
+                mark_analysis_job_awaiting_input(db_path, job_id, message=str(exc))
+            except AnalysisJobStateError:
+                current_job = load_analysis_job(db_path, job_id)
+                if current_job["status"] in TERMINAL_ANALYSIS_JOB_STATUSES:
+                    log_event(
+                        "analysis.model_decision_discarded",
+                        level=logging.WARNING,
+                        job_id=job_id,
+                        terminal_status=current_job["status"],
+                    )
+                    raise AnalysisJobTerminalError(current_job) from None
+                if current_job["status"] != "awaiting_input":
+                    raise
             setattr(exc, "analysis_job_id", job_id)
         log_event("analysis.model_decision_required", level=logging.WARNING, job_id=job_id)
         raise
