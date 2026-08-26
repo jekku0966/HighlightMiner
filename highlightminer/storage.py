@@ -268,6 +268,8 @@ def initialize(conn: sqlite3.Connection) -> None:
             ON analyses(source_id, chat_signature, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_analysis_jobs_updated
             ON analysis_jobs(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_analysis_jobs_status_updated
+            ON analysis_jobs(status, updated_at);
         CREATE INDEX IF NOT EXISTS idx_analysis_job_events_job
             ON analysis_job_events(job_id, id);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_jobs_active_source_id

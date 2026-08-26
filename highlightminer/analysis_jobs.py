@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -10,6 +11,8 @@ from .storage import connect, utc_now
 
 ACTIVE_ANALYSIS_JOB_STATUSES = ("queued", "running", "awaiting_input")
 TERMINAL_ANALYSIS_JOB_STATUSES = ("completed", "failed", "cancelled", "interrupted")
+ANALYSIS_JOB_HEARTBEAT_INTERVAL_SECONDS = 10.0
+ANALYSIS_JOB_STALE_AFTER_SECONDS = 90.0
 _EVENT_LEVELS = {"info", "warning", "error"}
 
 
@@ -266,6 +269,26 @@ def update_analysis_job_progress(
     return _job_dict(row)
 
 
+def heartbeat_analysis_job(
+    db_path: str | Path | None,
+    job_id: str,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Refresh a running worker's lease without adding a noisy event row."""
+    heartbeat_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    timestamp = heartbeat_at.isoformat(timespec="seconds")
+    with connect(db_path) as conn:
+        updated = conn.execute(
+            "UPDATE analysis_jobs SET updated_at = ? WHERE id = ? AND status = 'running'",
+            (timestamp, job_id),
+        )
+        if updated.rowcount != 1:
+            _row_for_job(conn, job_id)
+            return False
+    return True
+
+
 def record_analysis_job_event(
     db_path: str | Path | None,
     job_id: str,
@@ -512,4 +535,62 @@ def recover_interrupted_analysis_jobs(
     for job_id in job_ids:
         if interrupt_analysis_job(db_path, str(job_id), message=message):
             recovered.append(str(job_id))
+    return recovered
+
+
+def recover_stale_analysis_jobs(
+    db_path: str | Path | None,
+    *,
+    now: datetime | None = None,
+    stale_after_seconds: float = ANALYSIS_JOB_STALE_AFTER_SECONDS,
+) -> list[str]:
+    """Atomically interrupt running jobs whose worker lease has expired."""
+    stale_after_seconds = float(stale_after_seconds)
+    if stale_after_seconds <= 0.0:
+        raise ValueError("Analysis-job stale timeout must be positive.")
+    observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    cutoff = (observed_at - timedelta(seconds=stale_after_seconds)).isoformat(
+        timespec="seconds"
+    )
+    recovered_at = observed_at.isoformat(timespec="seconds")
+    recovered: list[str] = []
+    message = "Analysis worker heartbeat expired before the run finished"
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, updated_at
+            FROM analysis_jobs
+            WHERE status = 'running' AND updated_at <= ?
+            ORDER BY updated_at, created_at
+            """,
+            (cutoff,),
+        ).fetchall()
+        for row in rows:
+            job_id = str(row["id"])
+            updated = conn.execute(
+                """
+                UPDATE analysis_jobs
+                SET status = 'interrupted', stage = 'interrupted', message = ?,
+                    updated_at = ?, finished_at = ?
+                WHERE id = ? AND status = 'running' AND updated_at <= ?
+                """,
+                (message, recovered_at, recovered_at, job_id, cutoff),
+            )
+            if updated.rowcount != 1:
+                continue
+            _event(
+                conn,
+                job_id,
+                "job.interrupted",
+                level="warning",
+                stage="interrupted",
+                message=message,
+                details={
+                    "reason": "heartbeat_expired",
+                    "last_heartbeat_at": str(row["updated_at"]),
+                    "stale_before": cutoff,
+                },
+                created_at=recovered_at,
+            )
+            recovered.append(job_id)
     return recovered

@@ -2,19 +2,24 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
 from .analysis_jobs import (
+    ANALYSIS_JOB_HEARTBEAT_INTERVAL_SECONDS,
+    AnalysisJobStateError,
     create_analysis_job,
     complete_analysis_job,
     fail_analysis_job,
     find_active_analysis_job,
+    heartbeat_analysis_job,
     load_analysis_job,
     mark_analysis_job_awaiting_input,
     record_analysis_job_event,
+    recover_stale_analysis_jobs,
     start_analysis_job,
     update_analysis_job_progress,
 )
@@ -71,6 +76,42 @@ Progress = Callable[[str, float], None]
 
 _TRANSCRIPTION_PROGRESS_START = 0.32
 _TRANSCRIPTION_PROGRESS_END = 0.76
+
+
+class _AnalysisJobHeartbeat:
+    """Keep a running job's lease fresh until this worker exits the run."""
+
+    def __init__(self, db_path: str | Path | None, job_id: str):
+        self._db_path = db_path
+        self._job_id = job_id
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if not heartbeat_analysis_job(self._db_path, self._job_id):
+            current = load_analysis_job(self._db_path, self._job_id)
+            raise AnalysisJobStateError(
+                f"Cannot heartbeat analysis job {self._job_id} while it is {current['status']}."
+            )
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"analysis-heartbeat-{self._job_id[:8]}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(ANALYSIS_JOB_HEARTBEAT_INTERVAL_SECONDS):
+            try:
+                if not heartbeat_analysis_job(self._db_path, self._job_id):
+                    return
+            except Exception as exc:
+                log_exception("analysis.heartbeat_error", exc, job_id=self._job_id)
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
 
 
 def _noop(_: str, __: float) -> None:
@@ -234,8 +275,16 @@ def analyze_vod(
     timings: dict[str, float] = {}
     wav: Path | None = None
     detailed_started = False
+    job_heartbeat: _AnalysisJobHeartbeat | None = None
 
     try:
+        recovered_jobs = recover_stale_analysis_jobs(db_path)
+        if recovered_jobs:
+            log_event(
+                "analysis.stale_jobs_recovered",
+                level=logging.WARNING,
+                job_ids=recovered_jobs,
+            )
         if job_id is not None:
             existing_job = load_analysis_job(db_path, job_id)
             resumable_job_loaded = existing_job["status"] in {"queued", "awaiting_input"}
@@ -309,6 +358,8 @@ def analyze_vod(
             assert job_id is not None
             start_analysis_job(db_path, job_id)
             job_started = True
+            job_heartbeat = _AnalysisJobHeartbeat(db_path, job_id)
+            job_heartbeat.start()
 
             if allow_model_download:
                 record_analysis_job_event(
@@ -653,6 +704,8 @@ def analyze_vod(
         )
         raise
     finally:
+        if job_heartbeat is not None:
+            job_heartbeat.stop()
         if wav is not None:
             try:
                 wav.unlink(missing_ok=True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -12,10 +13,12 @@ from highlightminer.analysis_jobs import (
     create_analysis_job,
     fail_analysis_job,
     find_active_analysis_job,
+    heartbeat_analysis_job,
     list_analysis_job_events,
     load_analysis_job,
     mark_analysis_job_awaiting_input,
     recover_interrupted_analysis_jobs,
+    recover_stale_analysis_jobs,
     start_analysis_job,
     update_analysis_job_progress,
 )
@@ -188,6 +191,42 @@ def test_failures_and_recovery_are_terminal_and_observable(tmp_path: Path) -> No
     assert recover_interrupted_analysis_jobs(db, [interrupted["id"]]) == [interrupted["id"]]
     assert load_analysis_job(db, interrupted["id"])["status"] == "interrupted"
     assert list_analysis_job_events(db, interrupted["id"])[-1]["event"] == "job.interrupted"
+
+
+def test_expired_heartbeat_recovery_preserves_live_running_jobs(tmp_path: Path) -> None:
+    stale_video = tmp_path / "stale.mp4"
+    live_video = tmp_path / "live.mp4"
+    stale_video.write_bytes(b"stale")
+    live_video.write_bytes(b"live")
+    db = tmp_path / "highlightminer.db"
+    stale = create_analysis_job(db, _source(db, stale_video), {"run": "stale"})
+    live = create_analysis_job(db, _source(db, live_video), {"run": "live"})
+    start_analysis_job(db, stale["id"])
+    start_analysis_job(db, live["id"])
+
+    heartbeat_analysis_job(
+        db,
+        stale["id"],
+        now=datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc),
+    )
+    heartbeat_analysis_job(
+        db,
+        live["id"],
+        now=datetime(2026, 1, 1, 12, 1, 30, tzinfo=timezone.utc),
+    )
+
+    recovered = recover_stale_analysis_jobs(
+        db,
+        now=datetime(2026, 1, 1, 12, 2, tzinfo=timezone.utc),
+        stale_after_seconds=90.0,
+    )
+
+    assert recovered == [stale["id"]]
+    assert load_analysis_job(db, stale["id"])["status"] == "interrupted"
+    assert load_analysis_job(db, live["id"])["status"] == "running"
+    event = list_analysis_job_events(db, stale["id"])[-1]
+    assert event["event"] == "job.interrupted"
+    assert event["details"]["reason"] == "heartbeat_expired"
 
 
 def test_job_cannot_complete_with_an_analysis_from_another_source(tmp_path: Path) -> None:
