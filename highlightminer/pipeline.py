@@ -294,6 +294,9 @@ def analyze_vod(
             chat_path = stored_job_config.get("chat_path")
             content_label = str(stored_job_config.get("content_label") or "")
             reuse_features = bool(stored_job_config.get("reuse_features", True))
+            skip_transcription = skip_transcription or not bool(
+                stored_job_config.get("transcription_requested", True)
+            )
             source_info = {"fingerprint": str(stored_job_config["source_fingerprint"])}
 
         detailed_requested = detailed_diagnostics_next_run(db_path)

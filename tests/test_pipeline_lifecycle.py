@@ -217,3 +217,52 @@ def test_precreated_job_fails_cleanly_if_startup_validation_fails(tmp_path: Path
     failed = load_analysis_job(db, job["id"])
     assert failed["status"] == "failed"
     assert failed["error_type"] == "FileNotFoundError"
+
+
+def test_resume_preserves_snapshot_that_disabled_transcription(tmp_path: Path, monkeypatch) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"video")
+    db = tmp_path / "highlightminer.db"
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(
+        pipeline,
+        "resolve_model_reference",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("model resolution must remain disabled")
+        ),
+    )
+    source = register_source(
+        db,
+        {
+            "fingerprint": "source-fingerprint",
+            "path": str(video),
+            "video_name": video.name,
+            "file_size": video.stat().st_size,
+        },
+    )
+    config = pipeline.snapshot_analysis_config(
+        video=video,
+        work=tmp_path,
+        settings=Settings(),
+        chat_path=None,
+        content_label="Other",
+        source_fingerprint="source-fingerprint",
+        reuse_features=False,
+        transcription_requested=False,
+    )
+    job = create_analysis_job(db, source, config)
+
+    pipeline.analyze_vod(
+        video,
+        tmp_path,
+        Settings(),
+        db_path=db,
+        analysis_job_id=job["id"],
+        skip_transcription=False,
+    )
+
+    completed = load_analysis_job(db, job["id"])
+    assert completed["status"] == "completed"
+    events = [event["event"] for event in list_analysis_job_events(db, job["id"])]
+    assert "transcription.skip_requested" in events
+    assert "transcription.skipped" in events
