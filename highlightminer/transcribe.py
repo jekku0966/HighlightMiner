@@ -25,6 +25,10 @@ _PROFANITY = {
     "fuck", "fucking", "shit", "damn", "bitch", "asshole",
     "vittu", "saatana", "perkele", "jumalauta", "helvetti",
 }
+_REACTION_TOKEN_RE = re.compile(r"[^\W_]+(?:['’][^\W_]+)*", re.UNICODE)
+_REACTION_FIRST_OCCURRENCE_SCORE = 0.49
+_REACTION_REPEAT_LOG_BONUS = 0.10
+_REACTION_SCORE_CAP = 0.70
 
 TranscriptionProgress = Callable[[str, float], None]
 _PROGRESS_REPORT_INTERVAL_SECONDS = 1.0
@@ -102,15 +106,51 @@ def resolve_device(settings: Settings) -> tuple[str, str]:
     return "cpu", "int8" if settings.compute_type == "auto" else settings.compute_type
 
 
+def _reaction_tokens(text: str) -> tuple[str, ...]:
+    return tuple(match.group(0).casefold() for match in _REACTION_TOKEN_RE.finditer(text))
+
+
+def count_reaction_phrase_occurrences(text: str, reaction_phrases: list[str]) -> int:
+    """Count configured phrase sequences using punctuation-insensitive tokens.
+
+    Each unique configured phrase is counted independently and matches may
+    overlap. This makes a deliberate multi-word phrase exact while allowing a
+    sequence such as ``ha ha`` to occur twice in ``ha ha ha``. Duplicate
+    configuration entries do not multiply the score.
+    """
+    text_tokens = _reaction_tokens(text)
+    configured = {_reaction_tokens(phrase) for phrase in reaction_phrases if phrase.strip()}
+    configured.discard(())
+
+    occurrences = 0
+    for phrase_tokens in configured:
+        width = len(phrase_tokens)
+        occurrences += sum(
+            text_tokens[index:index + width] == phrase_tokens
+            for index in range(len(text_tokens) - width + 1)
+        )
+    return occurrences
+
+
+def _reaction_occurrence_score(occurrences: int) -> float:
+    if occurrences <= 0:
+        return 0.0
+    return min(
+        _REACTION_SCORE_CAP,
+        _REACTION_FIRST_OCCURRENCE_SCORE
+        + _REACTION_REPEAT_LOG_BONUS * math.log2(occurrences),
+    )
+
+
 def score_text(text: str, reaction_phrases: list[str]) -> tuple[float, list[str]]:
     raw = text.strip()
     lower = raw.lower()
     reasons: list[str] = []
     score = 0.0
 
-    hits = [phrase for phrase in reaction_phrases if phrase and phrase.lower() in lower]
-    if hits:
-        score += min(0.62, 0.28 + 0.13 * len(hits))
+    reaction_occurrences = count_reaction_phrase_occurrences(raw, reaction_phrases)
+    if reaction_occurrences:
+        score += _reaction_occurrence_score(reaction_occurrences)
         reasons.append("reaction phrase")
 
     if _LAUGH_RE.search(lower):
@@ -138,7 +178,7 @@ def score_text(text: str, reaction_phrases: list[str]) -> tuple[float, list[str]
         score += min(0.14, 0.05 * len(caps))
         reasons.append("raised/emphatic wording")
 
-    if 1 <= len(words) <= 7 and (hits or exclamations or profanity_hits or caps):
+    if 1 <= len(words) <= 7 and (exclamations or profanity_hits or caps):
         score += 0.08
 
     return clamp(score), reasons
