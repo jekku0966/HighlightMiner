@@ -109,6 +109,24 @@ def test_cancel_pending_job_clears_missing_job(monkeypatch, tmp_path) -> None:
     assert job is None
 
 
+def test_cancel_cleanup_removes_pending_and_queued_worker_state(monkeypatch) -> None:
+    state = {
+        ui_mine._QUEUED_ANALYSIS_KEY: {"analysis_job_id": "job-123"},
+        ui_mine._ANALYSIS_RUNNING_KEY: True,
+        ui_mine._PENDING_MODEL_ANALYSIS_KEY: {"analysis_job_id": "job-123"},
+        ui_mine._PENDING_RERUN_KEY: {"source": {"id": "source-123"}},
+    }
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+
+    ui_mine._clear_pending_analysis_state()
+    ui_mine._clear_queued_analysis_state()
+
+    assert ui_mine._PENDING_MODEL_ANALYSIS_KEY not in state
+    assert ui_mine._PENDING_RERUN_KEY not in state
+    assert ui_mine._QUEUED_ANALYSIS_KEY not in state
+    assert ui_mine._ANALYSIS_RUNNING_KEY not in state
+
+
 def test_terminal_model_decision_race_does_not_leave_pending_prompt(monkeypatch, tmp_path) -> None:
     state = {
         ui_mine._QUEUED_ANALYSIS_KEY: {"video_path": "vod.mp4"},

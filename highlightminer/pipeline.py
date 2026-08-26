@@ -739,7 +739,18 @@ def analyze_vod(
     except Exception as exc:
         if job_id is not None and (job_created or job_started or resumable_job_loaded):
             timings["pipeline_elapsed_seconds"] = _elapsed_since(pipeline_started_at)
-            fail_analysis_job(db_path, job_id, exc, timings=timings)
+            failed = fail_analysis_job(db_path, job_id, exc, timings=timings)
+            if not failed:
+                current_job = load_analysis_job(db_path, job_id)
+                if current_job["status"] in TERMINAL_ANALYSIS_JOB_STATUSES:
+                    log_event(
+                        "analysis.failure_discarded",
+                        level=logging.WARNING,
+                        job_id=job_id,
+                        terminal_status=current_job["status"],
+                        stale_error_type=type(exc).__name__,
+                    )
+                    raise AnalysisJobTerminalError(current_job) from exc
         log_exception(
             "analysis.error",
             exc,

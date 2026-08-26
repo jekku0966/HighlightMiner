@@ -368,3 +368,33 @@ def test_completion_callback_failure_does_not_reclassify_success(tmp_path: Path,
     completed = load_analysis_job(db, job_id)
     assert completed["status"] == "completed"
     assert completed["analysis_id"] == analysis_id
+
+
+def test_concurrent_terminal_state_wins_over_stale_worker_error(tmp_path: Path, monkeypatch) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"video")
+    db = tmp_path / "highlightminer.db"
+    _stub_pipeline(monkeypatch, probe_error=ValueError("stale worker failure"))
+    real_fail_job = pipeline.fail_analysis_job
+
+    def interrupt_before_failure(db_path, job_id, error, *, timings):
+        assert interrupt_analysis_job(
+            db_path,
+            job_id,
+            message="Another worker already recovered this job",
+        ) is True
+        return real_fail_job(db_path, job_id, error, timings=timings)
+
+    monkeypatch.setattr(pipeline, "fail_analysis_job", interrupt_before_failure)
+
+    with pytest.raises(AnalysisJobTerminalError) as raised:
+        pipeline.analyze_vod(
+            video,
+            tmp_path,
+            Settings(),
+            db_path=db,
+            reuse_features=False,
+        )
+
+    assert raised.value.job["status"] == "interrupted"
+    assert load_analysis_job(db, raised.value.job["id"])["status"] == "interrupted"

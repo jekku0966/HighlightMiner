@@ -269,6 +269,7 @@ def _render_model_decision(db_path: Path) -> bool:
                 st.error("This analysis is already running and cannot be cancelled safely.")
             else:
                 _clear_pending_analysis_state()
+                _clear_queued_analysis_state()
                 if outcome == "completed" and current_job and current_job.get("analysis_id"):
                     st.session_state.analysis_id = current_job["analysis_id"]
                     st.session_state["analysis_notice"] = "Analysis had already completed."
