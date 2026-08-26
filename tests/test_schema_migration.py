@@ -58,6 +58,14 @@ def test_pre_source_v02_database_migrates_in_place(tmp_path: Path) -> None:
     with connect(db) as migrated:
         columns = {row[1] for row in migrated.execute("PRAGMA table_info(analyses)")}
         assert {"source_id", "source_fingerprint", "run_number", "cache_json"} <= columns
+        tables = {
+            row[0]
+            for row in migrated.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        }
+        assert {"analysis_jobs", "analysis_job_events"} <= tables
+        assert migrated.execute(
+            "SELECT value FROM metadata WHERE key = 'schema_version'"
+        ).fetchone()[0] == "3"
 
     source, runs = find_source_runs(db, video)
     assert source["fingerprint"]

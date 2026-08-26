@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -13,7 +14,7 @@ from .runtime import app_root
 from .security import validate_legacy_analysis_file, validate_local_video
 from .util import load_json
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 FEATURE_SCHEMA_VERSION = 2
 ALGORITHM_VERSION = "heuristic-v1"
 DATABASE_FILENAME = "highlightminer.db"
@@ -187,6 +188,44 @@ def initialize(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (analysis_id, seq),
             FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS analysis_jobs (
+            id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            source_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL
+                CHECK (status IN (
+                    'queued', 'running', 'awaiting_input',
+                    'completed', 'failed', 'cancelled', 'interrupted'
+                )),
+            stage TEXT NOT NULL,
+            progress REAL NOT NULL DEFAULT 0.0
+                CHECK (progress >= 0.0 AND progress <= 1.0),
+            message TEXT NOT NULL DEFAULT '',
+            config_json TEXT NOT NULL,
+            timings_json TEXT NOT NULL DEFAULT '{}',
+            analysis_id TEXT,
+            error_type TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT,
+            FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE,
+            FOREIGN KEY (analysis_id) REFERENCES analyses(id) ON DELETE SET NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS analysis_job_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            level TEXT NOT NULL CHECK (level IN ('info', 'warning', 'error')),
+            event TEXT NOT NULL,
+            stage TEXT,
+            message TEXT NOT NULL DEFAULT '',
+            details_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (job_id) REFERENCES analysis_jobs(id) ON DELETE CASCADE
+        );
         """
     )
 
@@ -228,6 +267,24 @@ def initialize(conn: sqlite3.Connection) -> None:
             ON analyses(source_id, transcript_signature, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_analyses_chat_cache
             ON analyses(source_id, chat_signature, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_analysis_jobs_updated
+            ON analysis_jobs(updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_analysis_jobs_status_updated
+            ON analysis_jobs(status, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_analysis_job_events_job
+            ON analysis_job_events(job_id, id);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_analysis_jobs_active_source_id
+            ON analysis_jobs(source_id)
+            WHERE status IN ('queued', 'running', 'awaiting_input');
+
+        CREATE TRIGGER IF NOT EXISTS prevent_analysis_job_config_mutation
+        BEFORE UPDATE OF source_id, source_fingerprint, config_json ON analysis_jobs
+        WHEN NEW.source_id <> OLD.source_id
+          OR NEW.source_fingerprint <> OLD.source_fingerprint
+          OR NEW.config_json <> OLD.config_json
+        BEGIN
+            SELECT RAISE(ABORT, 'analysis job configuration is immutable');
+        END;
         """
     )
     conn.execute(
@@ -432,10 +489,28 @@ def save_analysis(
     source: dict[str, Any] | None = None,
     signatures: dict[str, str] | None = None,
     cache_info: dict[str, Any] | None = None,
+    connection: sqlite3.Connection | None = None,
 ) -> str:
     analysis_id = analysis_id or uuid.uuid4().hex
     video = validate_local_video(analysis["video_path"])
-    source_row = register_source(db_path, source or describe_source(video))
+    owns_connection = connection is None
+    if owns_connection:
+        source_row = register_source(db_path, source or describe_source(video))
+    else:
+        if source is None or not source.get("id"):
+            raise ValueError("An existing source is required for transactional analysis saves.")
+        persisted_source = connection.execute(
+            "SELECT id, fingerprint FROM sources WHERE id = ?",
+            (str(source["id"]),),
+        ).fetchone()
+        if persisted_source is None:
+            raise KeyError(f"Source not found: {source['id']}")
+        if str(persisted_source["fingerprint"]) != str(source["fingerprint"]):
+            raise ValueError("The source ID and fingerprint do not identify the same source.")
+        source_row = {
+            "id": str(persisted_source["id"]),
+            "fingerprint": str(persisted_source["fingerprint"]),
+        }
     content_label = normalize_content_label(analysis.get("content_label"))
     created_at = utc_now()
     signatures = signatures or {}
@@ -446,7 +521,8 @@ def save_analysis(
     audio_rows = list(audio_features)
     chat_rows = list(chat_features)
 
-    with connect(db_path) as conn:
+    connection_scope = connect(db_path) if owns_connection else nullcontext(connection)
+    with connection_scope as conn:
         run_number = int(
             conn.execute(
                 "SELECT COALESCE(MAX(run_number), 0) + 1 FROM analyses WHERE source_id = ?",
@@ -580,7 +656,8 @@ def save_analysis(
                 for i, row in enumerate(chat_rows)
             ],
         )
-        conn.commit()
+        if owns_connection:
+            conn.commit()
     return analysis_id
 
 

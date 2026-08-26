@@ -1,4 +1,7 @@
+from highlightminer import ui_mine
+from highlightminer.analysis_jobs import AnalysisJobTerminalError
 from highlightminer.config import Settings
+from highlightminer.model_access import ModelDecisionRequired
 from highlightminer.ui_common import (
     hydrate_persistent_widget,
     persist_widget_value,
@@ -61,3 +64,95 @@ def test_default_model_is_first_and_legacy_aliases_use_advanced_editor() -> None
         _ADVANCED_WHISPER_MODEL,
         "base.en",
     )
+
+
+def test_model_decision_keeps_persistent_job_identity(monkeypatch) -> None:
+    state: dict[str, object] = {}
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    error = ModelDecisionRequired("Choose a model")
+    error.analysis_job_id = "job-123"
+
+    ui_mine._queue_model_decision(error, video_path="vod.mp4")
+
+    pending = state[ui_mine._PENDING_MODEL_ANALYSIS_KEY]
+    assert pending["analysis_job_id"] == "job-123"
+    assert pending["video_path"] == "vod.mp4"
+
+
+def test_cancel_pending_job_distinguishes_terminal_state(monkeypatch, tmp_path) -> None:
+    completed = {"status": "completed", "analysis_id": "analysis-123"}
+    monkeypatch.setattr(ui_mine, "cancel_analysis_job", lambda _db, _job: False)
+    monkeypatch.setattr(ui_mine, "load_analysis_job", lambda _db, _job: completed)
+
+    outcome, job = ui_mine._cancel_pending_analysis_job(
+        tmp_path / "highlightminer.db",
+        "job-123",
+    )
+
+    assert outcome == "completed"
+    assert job == completed
+
+
+def test_cancel_pending_job_clears_missing_job(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        ui_mine,
+        "cancel_analysis_job",
+        lambda _db, _job: (_ for _ in ()).throw(KeyError("gone")),
+    )
+
+    outcome, job = ui_mine._cancel_pending_analysis_job(
+        tmp_path / "highlightminer.db",
+        "job-123",
+    )
+
+    assert outcome == "missing"
+    assert job is None
+
+
+def test_cancel_cleanup_removes_pending_and_queued_worker_state(monkeypatch) -> None:
+    state = {
+        ui_mine._QUEUED_ANALYSIS_KEY: {"analysis_job_id": "job-123"},
+        ui_mine._ANALYSIS_RUNNING_KEY: True,
+        ui_mine._PENDING_MODEL_ANALYSIS_KEY: {"analysis_job_id": "job-123"},
+        ui_mine._PENDING_RERUN_KEY: {"source": {"id": "source-123"}},
+    }
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+
+    ui_mine._clear_pending_analysis_state()
+    ui_mine._clear_queued_analysis_state()
+
+    assert ui_mine._PENDING_MODEL_ANALYSIS_KEY not in state
+    assert ui_mine._PENDING_RERUN_KEY not in state
+    assert ui_mine._QUEUED_ANALYSIS_KEY not in state
+    assert ui_mine._ANALYSIS_RUNNING_KEY not in state
+
+
+def test_terminal_model_decision_race_does_not_leave_pending_prompt(monkeypatch, tmp_path) -> None:
+    state = {
+        ui_mine._QUEUED_ANALYSIS_KEY: {"video_path": "vod.mp4"},
+        ui_mine._ANALYSIS_RUNNING_KEY: True,
+        ui_mine._PENDING_MODEL_ANALYSIS_KEY: {"analysis_job_id": "job-123"},
+        ui_mine._PENDING_RERUN_KEY: {"source": {"id": "source-123"}},
+    }
+    terminal = AnalysisJobTerminalError(
+        {
+            "id": "job-123",
+            "status": "cancelled",
+            "analysis_id": None,
+            "message": "Analysis cancelled",
+        }
+    )
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    monkeypatch.setattr(ui_mine.st, "rerun", lambda: None)
+
+    def raise_terminal(**_kwargs):
+        raise terminal
+
+    monkeypatch.setattr(ui_mine, "_run_analysis_ui", raise_terminal)
+
+    ui_mine._run_queued_analysis(tmp_path / "highlightminer.db")
+
+    assert state["analysis_notice"] == "Analysis was cancelled."
+    assert ui_mine._PENDING_MODEL_ANALYSIS_KEY not in state
+    assert ui_mine._PENDING_RERUN_KEY not in state
+    assert ui_mine._QUEUED_ANALYSIS_KEY not in state

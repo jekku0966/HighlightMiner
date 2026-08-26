@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 import streamlit as st
 
+from highlightminer.analysis_jobs import recover_stale_analysis_jobs
 from highlightminer.database_diagnostics import initialize_database_with_diagnostics
-from highlightminer.diagnostics import log_exception, log_startup
+from highlightminer.diagnostics import log_event, log_exception, log_startup
 from highlightminer.storage import default_db_path
 from highlightminer.ui_common import render_shutdown
 from highlightminer.ui_mine import analysis_is_running, render_mine_page
@@ -19,6 +22,13 @@ def _render_app() -> None:
     apply_shell_style()
     db_path = default_db_path()
     initialize_database_with_diagnostics(db_path)
+    recovered_jobs = recover_stale_analysis_jobs(db_path)
+    if recovered_jobs:
+        log_event(
+            "analysis.stale_jobs_recovered",
+            level=logging.WARNING,
+            job_ids=recovered_jobs,
+        )
     running = analysis_is_running()
 
     with st.container(border=True):

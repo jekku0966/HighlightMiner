@@ -4,6 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from .analysis_jobs import AnalysisJobTerminalError, cancel_analysis_job, load_analysis_job
 from .analysis_identity import load_analysis_identities, load_analysis_identity, save_analysis_title
 from .categorization import normalize_content_label
 from .export import PreviewFileLockError, create_preview_clip, export_clip
@@ -68,6 +69,19 @@ def _clear_pending_analysis_state() -> None:
     st.session_state.pop(_PENDING_RERUN_KEY, None)
 
 
+def _cancel_pending_analysis_job(db_path: Path, job_id: str | None) -> tuple[str, dict | None]:
+    """Cancel a waiting job and report the state observed after any race."""
+    if not job_id:
+        return "cancelled", None
+    try:
+        if cancel_analysis_job(db_path, str(job_id)):
+            return "cancelled", None
+        job = load_analysis_job(db_path, str(job_id))
+    except KeyError:
+        return "missing", None
+    return str(job["status"]), job
+
+
 def _candidate_rows(analysis: dict, review: dict) -> list[dict]:
     rows = []
     for candidate in analysis.get("candidates", []):
@@ -107,6 +121,7 @@ def _run_analysis_ui(
     reuse_features: bool = True,
     allow_model_download: bool = False,
     skip_transcription: bool = False,
+    analysis_job_id: str | None = None,
 ) -> str:
     settings = load_app_settings(db_path)
     with st.status("Analyzing…", expanded=True) as status:
@@ -129,6 +144,7 @@ def _run_analysis_ui(
             reuse_features=reuse_features,
             allow_model_download=allow_model_download,
             skip_transcription=skip_transcription,
+            analysis_job_id=analysis_job_id,
         )
         save_analysis_title(db_path, analysis_id, analysis_title)
     analysis = load_analysis(db_path, analysis_id)
@@ -155,6 +171,20 @@ def _run_queued_analysis(db_path: Path) -> None:
         st.session_state.analysis_id = _run_analysis_ui(db_path=db_path, **queued)
     except ModelDecisionRequired as exc:
         _queue_model_decision(exc, **queued)
+    except AnalysisJobTerminalError as exc:
+        _clear_pending_analysis_state()
+        job = exc.job
+        if job["status"] == "completed" and job.get("analysis_id"):
+            st.session_state.analysis_id = job["analysis_id"]
+            st.session_state["analysis_notice"] = "Analysis had already completed."
+        elif job["status"] == "cancelled":
+            st.session_state["analysis_notice"] = "Analysis was cancelled."
+        else:
+            st.session_state["analysis_error"] = str(
+                job.get("error_message")
+                or job.get("message")
+                or f"Analysis {job['status']}."
+            )
     except Exception as exc:
         st.session_state["analysis_error"] = f"{type(exc).__name__}: {exc}"
     finally:
@@ -163,10 +193,14 @@ def _run_queued_analysis(db_path: Path) -> None:
 
 
 def _queue_model_decision(exc: ModelDecisionRequired, **analysis_args) -> None:
-    st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = {
+    pending = {
         **analysis_args,
         "message": str(exc),
     }
+    analysis_job_id = getattr(exc, "analysis_job_id", None)
+    if analysis_job_id:
+        pending["analysis_job_id"] = str(analysis_job_id)
+    st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = pending
 
 
 def _resume_pending_model_analysis(
@@ -227,8 +261,33 @@ def _render_model_decision(db_path: Path) -> bool:
             set_model_download_consent("deny", db_path)
             _resume_pending_model_analysis(db_path, skip_transcription=True)
         if st.button("Cancel analysis", width="stretch"):
-            _clear_pending_analysis_state()
-            st.rerun()
+            outcome, current_job = _cancel_pending_analysis_job(
+                db_path,
+                pending.get("analysis_job_id"),
+            )
+            if outcome == "running":
+                st.error("This analysis is already running and cannot be cancelled safely.")
+            else:
+                _clear_pending_analysis_state()
+                _clear_queued_analysis_state()
+                if outcome == "completed" and current_job and current_job.get("analysis_id"):
+                    st.session_state.analysis_id = current_job["analysis_id"]
+                    st.session_state["analysis_notice"] = "Analysis had already completed."
+                elif outcome == "failed" and current_job:
+                    st.session_state["analysis_error"] = str(
+                        current_job.get("error_message")
+                        or current_job.get("message")
+                        or "Analysis failed."
+                    )
+                elif outcome == "missing":
+                    st.session_state["analysis_notice"] = "The analysis job no longer exists."
+                elif outcome in {"cancelled", "interrupted"}:
+                    st.session_state["analysis_notice"] = (
+                        "Analysis cancelled."
+                        if outcome == "cancelled"
+                        else "Analysis had already been interrupted."
+                    )
+                st.rerun()
     return True
 
 
