@@ -18,6 +18,98 @@ class TimelineSignal:
     combined: float = 0.0
 
 
+_DUPLICATE_MIN_CONTAINMENT = 0.65
+_DUPLICATE_MIN_PEAK_TOLERANCE_SEC = 1.0
+_DUPLICATE_MAX_PEAK_TOLERANCE_SEC = 5.0
+
+
+def _candidate_duration(candidate: dict) -> float:
+    return max(0.0, float(candidate["end"]) - float(candidate["start"]))
+
+
+def _candidate_peak(candidate: dict) -> float:
+    start = float(candidate["start"])
+    end = float(candidate["end"])
+    return float(candidate.get("peak_time", (start + end) / 2.0))
+
+
+def _represents_same_event(
+    left: dict,
+    right: dict,
+    *,
+    peak_tolerance_floor_sec: float = 0.0,
+) -> bool:
+    """Return whether two padded clip windows still describe one event.
+
+    Clip overlap alone is insufficient because pre/post-roll can make distinct
+    nearby events overlap heavily. A duplicate must both contain most of the
+    shorter clip and have nearby signal peaks. The peak tolerance scales with
+    clip length but is capped so long clips do not swallow adjacent moments.
+    Callers may raise its floor to cover the gap that separated seed groups.
+    """
+    intersection = max(
+        0.0,
+        min(float(left["end"]), float(right["end"]))
+        - max(float(left["start"]), float(right["start"])),
+    )
+    shorter = min(_candidate_duration(left), _candidate_duration(right))
+    if shorter <= 0.0 or intersection / shorter < _DUPLICATE_MIN_CONTAINMENT:
+        return False
+
+    peak_tolerance = max(
+        max(0.0, float(peak_tolerance_floor_sec)),
+        min(
+            _DUPLICATE_MAX_PEAK_TOLERANCE_SEC,
+            max(_DUPLICATE_MIN_PEAK_TOLERANCE_SEC, shorter * 0.20),
+        ),
+    )
+    return abs(_candidate_peak(left) - _candidate_peak(right)) <= peak_tolerance
+
+
+def _candidate_strength(candidate: dict) -> tuple[float, int, float, float]:
+    features = candidate.get("features") or {}
+    return (
+        float(candidate.get("score", 0.0)),
+        int(features.get("active_signal_count", 0)),
+        float(features.get("peak_combined", 0.0)),
+        -_candidate_duration(candidate),
+    )
+
+
+def deduplicate_candidates(
+    candidates: list[dict],
+    *,
+    max_candidates: int,
+    peak_tolerance_floor_sec: float = 0.0,
+) -> list[dict]:
+    """Suppress weaker candidates for the same event without merging windows."""
+    limit = max(0, int(max_candidates))
+    if limit == 0:
+        return []
+    ordered = sorted(candidates, key=_candidate_strength, reverse=True)
+    kept: list[dict] = []
+    for candidate in ordered:
+        duplicate_of = next(
+            (
+                winner
+                for winner in kept
+                if _represents_same_event(
+                    candidate,
+                    winner,
+                    peak_tolerance_floor_sec=peak_tolerance_floor_sec,
+                )
+            ),
+            None,
+        )
+        if duplicate_of is not None:
+            features = duplicate_of.setdefault("features", {})
+            features["duplicates_suppressed"] = int(features.get("duplicates_suppressed", 0)) + 1
+            continue
+        candidate.setdefault("features", {}).setdefault("duplicates_suppressed", 0)
+        kept.append(candidate)
+    return kept[:limit]
+
+
 def _nearest_feature(features: list[dict], t: float, key: str = "score") -> float:
     if not features:
         return 0.0
@@ -195,20 +287,12 @@ def find_candidates(
             "features": features,
         })
 
-    candidates.sort(key=lambda c: c["score"], reverse=True)
-    kept: list[dict] = []
-    for cand in candidates:
-        overlap = False
-        for prev in kept:
-            intersection = max(0.0, min(cand["end"], prev["end"]) - max(cand["start"], prev["start"]))
-            smaller = min(cand["end"] - cand["start"], prev["end"] - prev["start"])
-            if smaller > 0 and intersection / smaller >= 0.65:
-                overlap = True
-                break
-        if not overlap:
-            kept.append(cand)
-        if len(kept) >= settings.max_candidates:
-            break
+    timeline_step = max(0.5, min(1.0, settings.audio_hop_sec))
+    kept = deduplicate_candidates(
+        candidates,
+        max_candidates=settings.max_candidates,
+        peak_tolerance_floor_sec=settings.merge_gap_sec + timeline_step,
+    )
 
     for rank, cand in enumerate(kept, start=1):
         cand["rank"] = rank
