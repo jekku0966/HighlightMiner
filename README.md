@@ -123,6 +123,8 @@ The Mine / Review page provides local VOD/chat/work-folder pickers, Content/Game
 
 Kept clips can be staged before FFmpeg starts. Queue entries survive Streamlit reruns, reject duplicates, expose per-item and overall status, retain failures for retry, and record successful outputs in export history. A custom clip title becomes the clean filename; untitled clips use the candidate ID.
 
+Candidate, preview, and export-queue timestamps share one human-readable display format: whole seconds omit `.000`, and fractional seconds omit redundant trailing zeroes. Stored review boundaries and the numeric values passed to preview/export remain unchanged.
+
 Exports use sanitized category folders and never silently overwrite an existing file:
 
 ```text

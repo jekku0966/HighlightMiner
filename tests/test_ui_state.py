@@ -58,6 +58,37 @@ def test_analysis_deletion_requires_the_full_exact_id() -> None:
     assert ui_mine._analysis_delete_confirmation_matches(analysis_id, "") is False
 
 
+def test_candidate_table_formats_bounds_without_changing_review_values() -> None:
+    analysis = {
+        "candidates": [
+            {
+                "id": "H001",
+                "rank": 1,
+                "score": 0.9,
+                "start": 10.0,
+                "end": 20.0,
+                "reason": "reaction",
+            }
+        ]
+    }
+    review = {
+        "items": {
+            "H001": {
+                "status": "keep",
+                "start": 12.0,
+                "end": 20.5,
+            }
+        }
+    }
+
+    rows = ui_mine._candidate_rows(analysis, review)
+
+    assert rows[0]["Start"] == "00:00:12"
+    assert rows[0]["End"] == "00:00:20.5"
+    assert review["items"]["H001"]["start"] == 12.0
+    assert review["items"]["H001"]["end"] == 20.5
+
+
 def test_settings_editor_reseeds_when_streamlit_removed_a_widget_key() -> None:
     state = {
         key: "present"
