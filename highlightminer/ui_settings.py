@@ -12,8 +12,6 @@ from .settings_presets import (
     WEIGHT_PRESETS,
     detect_weight_preset,
     normalize_weights,
-    preset_is_pending,
-    preset_preview,
 )
 from .settings_store import export_app_settings, import_app_settings, load_app_settings, reset_app_settings, save_app_settings
 from .ui_common import _JSON_FILTER, choose_save_file, path_picker
@@ -102,7 +100,8 @@ def _editor_weights() -> dict[str, float]:
     }
 
 
-def _apply_preset() -> None:
+def _apply_selected_preset() -> None:
+    """Fill the weight editor when the preset selector changes."""
     preset = st.session_state.get(_EDITOR_KEYS["preset"], "Balanced")
     if preset not in WEIGHT_PRESETS:
         return
@@ -110,6 +109,11 @@ def _apply_preset() -> None:
     st.session_state[_EDITOR_KEYS["audio_weight"]] = values["audio"]
     st.session_state[_EDITOR_KEYS["transcript_weight"]] = values["transcript"]
     st.session_state[_EDITOR_KEYS["chat_weight"]] = values["chat"]
+
+
+def _sync_preset_to_weights() -> None:
+    """Keep manual slider edits represented as Custom (or an exact preset)."""
+    st.session_state[_EDITOR_KEYS["preset"]] = detect_weight_preset(_editor_weights())
 
 
 def _browse_export() -> None:
@@ -156,7 +160,10 @@ def render_settings_page(db_path: Path) -> None:
         _seed_editor(settings)
 
     st.header("⚙️ Settings")
-    st.caption("These settings are stored in highlightminer.db and apply to future analyses and reruns. Existing analysis runs keep their original settings snapshot.")
+    st.caption(
+        "Analysis settings are stored in highlightminer.db and apply to future analyses and reruns. "
+        "Existing runs keep their original snapshot; Model Access is saved separately as database-local security state."
+    )
     notice = st.session_state.pop("settings_notice", None)
     if notice:
         st.success(notice)
@@ -191,35 +198,42 @@ def render_settings_page(db_path: Path) -> None:
         st.checkbox("VAD filtering", key=_EDITOR_KEYS["vad"], help="Voice activity detection can skip long non-speech regions during transcription.")
 
     with detection:
-        current_weights = _editor_weights()
-        p1, p2 = st.columns([3, 1], vertical_alignment="bottom")
-        with p1:
-            st.selectbox("Signal weighting preset", list(WEIGHT_PRESETS) + ["Custom"], key=_EDITOR_KEYS["preset"], help="Presets change signal weights only.")
-        selected_preset = str(st.session_state[_EDITOR_KEYS["preset"]])
-        preset_pending = preset_is_pending(selected_preset, current_weights)
-        with p2:
-            st.button(
-                "Apply preset",
-                width="stretch",
-                disabled=selected_preset == "Custom",
-                type="primary" if preset_pending else "secondary",
-                on_click=_apply_preset,
-            )
+        st.selectbox(
+            "Signal weighting preset",
+            list(WEIGHT_PRESETS) + ["Custom"],
+            key=_EDITOR_KEYS["preset"],
+            help="Selecting a preset fills the three weight sliders. Save analysis settings to make the editor values active.",
+            on_change=_apply_selected_preset,
+        )
+        st.caption(
+            "Choose a preset to fill the sliders. Manual edits show Custom unless the values match a built-in preset. "
+            "Changes remain in the editor until you save analysis settings."
+        )
 
-        preview = preset_preview(selected_preset)
-        if preview is not None:
-            apply_state = " — **not applied**" if preset_pending else " — applied"
-            st.caption(
-                f"Selected preset: **{selected_preset}** · "
-                f"audio {preview['audio']:.0%} / transcript {preview['transcript']:.0%} / chat {preview['chat']:.0%}"
-                f"{apply_state}"
-            )
-        else:
-            st.caption("Selected preset: **Custom** · use the sliders below to set the signal weights.")
-
-        st.slider("Audio weight", 0.0, 1.0, step=0.01, key=_EDITOR_KEYS["audio_weight"])
-        st.slider("Transcript / reaction weight", 0.0, 1.0, step=0.01, key=_EDITOR_KEYS["transcript_weight"])
-        st.slider("Chat weight", 0.0, 1.0, step=0.01, key=_EDITOR_KEYS["chat_weight"])
+        st.slider(
+            "Audio weight",
+            0.0,
+            1.0,
+            step=0.01,
+            key=_EDITOR_KEYS["audio_weight"],
+            on_change=_sync_preset_to_weights,
+        )
+        st.slider(
+            "Transcript / reaction weight",
+            0.0,
+            1.0,
+            step=0.01,
+            key=_EDITOR_KEYS["transcript_weight"],
+            on_change=_sync_preset_to_weights,
+        )
+        st.slider(
+            "Chat weight",
+            0.0,
+            1.0,
+            step=0.01,
+            key=_EDITOR_KEYS["chat_weight"],
+            on_change=_sync_preset_to_weights,
+        )
         raw_weights = _editor_weights()
         if sum(raw_weights.values()) > 0:
             effective = normalize_weights(raw_weights)
@@ -282,7 +296,7 @@ def render_settings_page(db_path: Path) -> None:
     st.divider()
     s1, s2 = st.columns([3, 1])
     with s1:
-        if st.button("💾 Save settings", type="primary", width="stretch"):
+        if st.button("💾 Save analysis settings", type="primary", width="stretch"):
             try:
                 saved = save_app_settings(_build_settings(), db_path)
                 _request_reload(f"Settings saved. Weight profile: {detect_weight_preset(saved.weights)}.")
