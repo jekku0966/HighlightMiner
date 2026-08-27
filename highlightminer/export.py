@@ -269,7 +269,9 @@ def export_clip(
     out_dir = ensure_dir(base_dir / content_folder_name(category))
     bounds = _source_clip_bounds(src, float(start), float(end), operation="export", clip_id=clip_id)
     duration = bounds.end - bounds.start
-    stem = safe_name(f"{clip_id}_{title}" if title else clip_id)
+    # A deliberate title is the filename, not decorative text after an
+    # internal candidate ID. Untitled clips retain the stable candidate ID.
+    stem = safe_name(title if title else clip_id)
     out = _non_overwriting_path(out_dir / f"{stem}.mp4")
 
     _run_h264_encode(ffmpeg, src, out, bounds.start, duration, preview=False)

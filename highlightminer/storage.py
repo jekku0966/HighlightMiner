@@ -14,7 +14,7 @@ from .runtime import app_root
 from .security import validate_legacy_analysis_file, validate_local_video
 from .util import load_json
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 FEATURE_SCHEMA_VERSION = 2
 ALGORITHM_VERSION = "heuristic-v1"
 DATABASE_FILENAME = "highlightminer.db"
@@ -155,6 +155,46 @@ def initialize(conn: sqlite3.Connection) -> None:
                 REFERENCES candidates(analysis_id, candidate_id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS export_batches (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL
+                CHECK (status IN ('running', 'completed', 'failed', 'interrupted')),
+            total_items INTEGER NOT NULL DEFAULT 0,
+            completed_items INTEGER NOT NULL DEFAULT 0,
+            failed_items INTEGER NOT NULL DEFAULT 0,
+            message TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            finished_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS export_queue_items (
+            id TEXT PRIMARY KEY,
+            analysis_id TEXT NOT NULL,
+            candidate_id TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            content_label TEXT NOT NULL,
+            start REAL NOT NULL,
+            end REAL NOT NULL,
+            title TEXT NOT NULL DEFAULT '',
+            export_dir TEXT NOT NULL,
+            status TEXT NOT NULL
+                CHECK (status IN ('queued', 'exporting', 'completed', 'failed')),
+            batch_id TEXT,
+            output_path TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            UNIQUE (analysis_id, candidate_id),
+            FOREIGN KEY (analysis_id, candidate_id)
+                REFERENCES candidates(analysis_id, candidate_id) ON DELETE CASCADE,
+            FOREIGN KEY (batch_id) REFERENCES export_batches(id) ON DELETE SET NULL
+        );
+
         CREATE TABLE IF NOT EXISTS transcript_segments (
             analysis_id TEXT NOT NULL,
             seq INTEGER NOT NULL,
@@ -254,6 +294,13 @@ def initialize(conn: sqlite3.Connection) -> None:
             ON review_events(analysis_id, candidate_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_exports_candidate
             ON exports(analysis_id, candidate_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_export_queue_status_created
+            ON export_queue_items(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_export_queue_batch
+            ON export_queue_items(batch_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_export_batches_active
+            ON export_batches((1))
+            WHERE status = 'running';
         CREATE INDEX IF NOT EXISTS idx_transcript_analysis_time
             ON transcript_segments(analysis_id, start, end);
         CREATE INDEX IF NOT EXISTS idx_analyses_created

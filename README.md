@@ -27,7 +27,7 @@ Because HighlightMiner is open source, third parties can still build their own e
 
 ## SQLite-backed application state
 
-v0.2 keeps structured state in `highlightminer.db`: analyses, candidates, transcript/audio/chat features, source/run history, Keep/Reject/Unreviewed reviews, timing/title edits, review events, export history, and the active desktop-app settings profile.
+v0.2 keeps structured state in `highlightminer.db`: analyses, candidates, transcript/audio/chat features, source/run history, Keep/Reject/Unreviewed reviews, timing/title edits, review events, the persistent export queue and export history, and the active desktop-app settings profile.
 
 ```text
 HighlightMiner/
@@ -117,15 +117,17 @@ The dataset plumbing exists; the actual personal preference learner is not imple
 
 ## Review and export
 
-The Mine / Review page provides local VOD/chat/work-folder pickers, Content/Game, source-aware history, v0.1 import, candidate previews, Keep/Reject/Unreview, timing/title editing, transcript/signal context, and export.
+The Mine / Review page provides local VOD/chat/work-folder pickers, Content/Game, source-aware history, v0.1 import, candidate previews, Keep/Reject/Unreview, timing/title editing, transcript/signal context, and a persistent export queue.
+
+Kept clips can be staged before FFmpeg starts. Queue entries survive Streamlit reruns, reject duplicates, expose per-item and overall status, retain failures for retry, and record successful outputs in export history. A custom clip title becomes the clean filename; untitled clips use the candidate ID.
 
 Exports use sanitized category folders and never silently overwrite an existing file:
 
 ```text
 clips/
 └── Overwatch 2/
-    ├── H003_clutch.mp4
-    └── H003_clutch_2.mp4
+    ├── clutch.mp4
+    └── clutch_2.mp4
 ```
 
 ## Legacy v0.1 import
