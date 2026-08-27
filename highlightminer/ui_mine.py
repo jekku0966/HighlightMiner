@@ -64,6 +64,7 @@ from .ui_common import (
     persistent_text_input,
     render_shutdown,
 )
+from .ui_style import MODEL_ACCESS_CHOICES_KEY, model_access_choices_css
 from .util import format_time
 
 _PENDING_MODEL_ANALYSIS_KEY = "pending_model_analysis"
@@ -73,6 +74,7 @@ _ANALYSIS_RUNNING_KEY = "analysis_running"
 _PREVIEW_ACTIVE_KEY = "preview_active_candidate"
 _PREVIEW_CLOSED_KEY = "preview_closed"
 _PENDING_DELETE_ANALYSIS_KEY = "pending_delete_analysis_id"
+_CONTINUE_WITHOUT_SPEECH_LABEL = "Continue without\nspeech"
 
 
 def analysis_is_running(db_path: Path | None = None) -> bool:
@@ -468,26 +470,44 @@ def _render_model_decision(db_path: Path) -> bool:
             "You can choose a complete local CTranslate2 Whisper model, or continue without speech recognition. "
             "Continuing remembers that model downloads are disabled and renormalizes scoring across the signals that remain available."
         )
-        download, local, no_speech = st.columns(3)
-        if download.button("Download model", type="primary", width="stretch"):
-            set_model_download_consent("allow", db_path)
-            _resume_pending_model_analysis(db_path, allow_model_download=True)
-        if local.button("Choose local model", width="stretch"):
-            try:
-                selected = choose_folder("Choose a CTranslate2 Whisper model folder", str(models_root()))
-                if selected:
-                    validated = validate_local_model_directory(selected)
-                    current = load_model_access(db_path)
-                    save_model_access(
-                        ModelAccessPreferences(current.download_consent, str(validated)),
-                        db_path,
+        st.markdown(model_access_choices_css(), unsafe_allow_html=True)
+        with st.container(key=MODEL_ACCESS_CHOICES_KEY):
+            download, local, no_speech = st.columns(
+                3,
+                vertical_alignment="center",
+            )
+            if download.button(
+                "Download model",
+                type="primary",
+                width="stretch",
+            ):
+                set_model_download_consent("allow", db_path)
+                _resume_pending_model_analysis(db_path, allow_model_download=True)
+            if local.button(
+                "Choose local model",
+                width="stretch",
+            ):
+                try:
+                    selected = choose_folder(
+                        "Choose a CTranslate2 Whisper model folder",
+                        str(models_root()),
                     )
-                    _resume_pending_model_analysis(db_path)
-            except Exception as exc:
-                st.exception(exc)
-        if no_speech.button("Continue without speech", width="stretch"):
-            set_model_download_consent("deny", db_path)
-            _resume_pending_model_analysis(db_path, skip_transcription=True)
+                    if selected:
+                        validated = validate_local_model_directory(selected)
+                        current = load_model_access(db_path)
+                        save_model_access(
+                            ModelAccessPreferences(current.download_consent, str(validated)),
+                            db_path,
+                        )
+                        _resume_pending_model_analysis(db_path)
+                except Exception as exc:
+                    st.exception(exc)
+            if no_speech.button(
+                _CONTINUE_WITHOUT_SPEECH_LABEL,
+                width="stretch",
+            ):
+                set_model_download_consent("deny", db_path)
+                _resume_pending_model_analysis(db_path, skip_transcription=True)
         if st.button("Cancel analysis", width="stretch"):
             outcome, current_job = _cancel_pending_analysis_job(
                 db_path,
