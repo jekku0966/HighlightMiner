@@ -38,6 +38,17 @@ def test_widget_backing_state_survives_streamlit_widget_cleanup() -> None:
     assert state[persisted_widget_key("video_path_input")] == r"D:\VODs\selected.mp4"
 
 
+def test_load_latest_skips_newer_incompatible_analysis_formats() -> None:
+    runs = [
+        {"id": "future", "compatible": False},
+        {"id": "latest-loadable", "compatible": True},
+        {"id": "older", "compatible": True},
+    ]
+
+    assert ui_mine._latest_compatible_run(runs)["id"] == "latest-loadable"
+    assert ui_mine._latest_compatible_run([runs[0]]) is None
+
+
 def test_settings_editor_reseeds_when_streamlit_removed_a_widget_key() -> None:
     state = {
         key: "present"

@@ -67,3 +67,23 @@ def test_changed_reaction_weight_does_not_invalidate_cached_transcript() -> None
     changed_signatures = pipeline._stage_signatures(changed, None, access)
 
     assert original_signatures["transcript"] == changed_signatures["transcript"]
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        Settings(whisper_model="small"),
+        Settings(language="en"),
+        Settings(beam_size=1),
+        Settings(vad_filter=False),
+        Settings(compute_type="float32"),
+    ],
+)
+def test_transcription_affecting_settings_invalidate_only_transcript_evidence(changed: Settings) -> None:
+    access = ModelAccessPreferences(download_consent="deny")
+    original = pipeline._stage_signatures(Settings(), None, access)
+    updated = pipeline._stage_signatures(changed, None, access)
+
+    assert updated["transcript"] != original["transcript"]
+    assert updated["audio"] == original["audio"]
+    assert updated["chat"] == original["chat"]

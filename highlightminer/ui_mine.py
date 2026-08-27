@@ -218,6 +218,11 @@ def _history_label(row: dict, identity: dict[str, str]) -> str:
     )
 
 
+def _latest_compatible_run(runs: list[dict]) -> dict | None:
+    """Runs arrive newest-first; incompatible future formats are skipped."""
+    return next((run for run in runs if bool(run.get("compatible", True))), None)
+
+
 def _run_analysis_ui(
     *,
     db_path: Path,
@@ -622,8 +627,11 @@ def _render_analysis_controls(
     if not pending:
         return
     runs = pending.get("runs", [])
-    latest = runs[0] if runs else None
-    st.warning(f"This VOD already has {len(runs)} analysis run(s). Load the latest one or create a new run.")
+    latest = _latest_compatible_run(runs)
+    st.warning(
+        f"This VOD already has {len(runs)} analysis run(s). Choose whether to load results, "
+        "rescore with reusable evidence, or process everything again."
+    )
     if latest:
         latest_identity = load_analysis_identity(db_path, latest["id"])
         latest_title = latest_identity.get("analysis_title", "")
@@ -633,9 +641,16 @@ def _render_analysis_controls(
             f"{latest['candidates']} candidates · {latest['kept']} kept / "
             f"{latest['rejected']} rejected / {latest['unreviewed']} unreviewed"
         )
-    force_fresh = st.checkbox("Force full reprocess", value=False, help="Normally compatible audio, Whisper transcript, and chat features are reused.", key="force_fresh_rerun")
-    r1, r2 = st.columns(2)
-    if latest and r1.button("Load latest", width="stretch"):
+    else:
+        st.caption("No completed analysis in a compatible format can be loaded by this app version.")
+
+    st.caption(
+        "**Load latest** does no work. **Analyze again** creates a new run with current settings and "
+        "reuses only matching evidence. **Force full reprocess** ignores all prior evidence."
+    )
+    r1, r2, r3 = st.columns(3)
+    if r1.button("Load latest", width="stretch", disabled=latest is None):
+        assert latest is not None
         st.session_state.analysis_id = latest["id"]
         st.session_state.pop(_PENDING_RERUN_KEY, None)
         st.rerun()
@@ -649,7 +664,24 @@ def _render_analysis_controls(
                 content_label=content_label,
                 analysis_title=analysis_title,
                 work_dir=work_dir,
-                reuse_features=not force_fresh,
+                reuse_features=True,
+            )
+            _queue_analysis(**_job_analysis_args(job))
+            st.session_state.pop(_PENDING_RERUN_KEY, None)
+            st.rerun()
+        except Exception as exc:
+            st.exception(exc)
+    if r3.button("Force full reprocess", width="stretch"):
+        try:
+            job = _create_queued_analysis_job(
+                db_path,
+                source=pending.get("source"),
+                video_path=video_path,
+                chat_path=chat_path,
+                content_label=content_label,
+                analysis_title=analysis_title,
+                work_dir=work_dir,
+                reuse_features=False,
             )
             _queue_analysis(**_job_analysis_args(job))
             st.session_state.pop(_PENDING_RERUN_KEY, None)

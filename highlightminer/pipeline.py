@@ -79,6 +79,12 @@ Progress = Callable[[str, float], None]
 
 _TRANSCRIPTION_PROGRESS_START = 0.32
 _TRANSCRIPTION_PROGRESS_END = 0.76
+REUSE_COMPATIBLE_EVIDENCE = "reuse_compatible_evidence"
+FORCE_FULL_REPROCESS = "force_full_reprocess"
+
+
+def _processing_mode(reuse_features: bool) -> str:
+    return REUSE_COMPATIBLE_EVIDENCE if reuse_features else FORCE_FULL_REPROCESS
 
 
 class _AnalysisJobHeartbeat:
@@ -215,6 +221,7 @@ def snapshot_analysis_config(
         "content_label": content_label,
         "source_fingerprint": source_fingerprint,
         "reuse_features": bool(reuse_features),
+        "processing_mode": _processing_mode(reuse_features),
         "transcription_requested": bool(transcription_requested),
         "settings": asdict(settings),
     }
@@ -239,6 +246,7 @@ def _job_configs_match(left: dict, right: dict) -> bool:
         "content_label",
         "source_fingerprint",
         "reuse_features",
+        "processing_mode",
         "settings",
     }
     return {key: left.get(key) for key in invariant_keys} == {
@@ -422,6 +430,7 @@ def analyze_vod(
             "analysis.start",
             job_id=job_id,
             reuse_enabled=bool(reuse_features),
+            processing_mode=_processing_mode(reuse_features),
             chat_available=bool(chat_path),
             transcription_requested=bool(stored_job_config.get("transcription_requested", True)),
         )
@@ -457,7 +466,11 @@ def analyze_vod(
                 if cache_from
                 else "No compatible evidence reused"
             ),
-            details={"reuse_enabled": bool(reuse_features), "reused_stages": sorted(cache_from)},
+            details={
+                "processing_mode": _processing_mode(reuse_features),
+                "reuse_enabled": bool(reuse_features),
+                "reused_stages": sorted(cache_from),
+            },
         )
 
         need_audio = audio_features is None
@@ -635,6 +648,7 @@ def analyze_vod(
             "reused": cache_from,
             "reused_stages": sorted(cache_from),
             "reuse_enabled": bool(reuse_features),
+            "processing_mode": _processing_mode(reuse_features),
             "transcription_skipped": transcription_skipped,
             "transcription_skip_reason": skip_reason,
             "timings": timings,

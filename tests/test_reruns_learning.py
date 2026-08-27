@@ -2,6 +2,8 @@ from pathlib import Path
 
 from highlightminer.identity import describe_source
 from highlightminer.storage import (
+    FEATURE_SCHEMA_VERSION,
+    analysis_run_is_compatible,
     find_source_runs,
     learning_examples,
     learning_summary,
@@ -56,6 +58,7 @@ def test_same_vod_gets_multiple_runs_and_reusable_stages(tmp_path: Path) -> None
     second = _save(db, video, score=0.77)
     assert load_analysis(db, first)["run_number"] == 1
     assert load_analysis(db, second)["run_number"] == 2
+    assert load_analysis(db, first)["candidates"][0]["score"] == 0.91
 
     source, runs = find_source_runs(db, video)
     assert len(runs) == 2
@@ -69,6 +72,26 @@ def test_same_vod_gets_multiple_runs_and_reusable_stages(tmp_path: Path) -> None
     assert cache["audio"][0]["score"] == 0.75
     assert cache["transcript"][0]["text"] == "what the fuck"
     assert cache["chat"][0]["count"] == 5
+
+
+def test_source_history_marks_only_loadable_completed_analyses_compatible(tmp_path: Path) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"compatibility" * 10000)
+    db = tmp_path / "highlightminer.db"
+    analysis_id = _save(db, video)
+
+    source, runs = find_source_runs(db, video)
+
+    assert runs[0]["id"] == analysis_id
+    assert runs[0]["compatible"] is True
+    assert analysis_run_is_compatible(
+        {**runs[0], "feature_schema_version": FEATURE_SCHEMA_VERSION + 1},
+        expected_source_fingerprint=source["fingerprint"],
+    ) is False
+    assert analysis_run_is_compatible(
+        runs[0],
+        expected_source_fingerprint="another-source",
+    ) is False
 
 
 def test_skipped_transcript_run_does_not_shadow_older_valid_cache(tmp_path: Path) -> None:
