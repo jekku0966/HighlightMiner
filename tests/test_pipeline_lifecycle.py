@@ -90,6 +90,7 @@ def test_model_decision_resumes_same_job_with_original_settings_snapshot(tmp_pat
     waiting = load_analysis_job(db, job_id)
     assert waiting["status"] == "awaiting_input"
     assert waiting["config"]["settings"]["beam_size"] == 5
+    assert waiting["config"]["processing_mode"] == pipeline.FORCE_FULL_REPROCESS
 
     analysis_id = pipeline.analyze_vod(
         video,
@@ -107,6 +108,7 @@ def test_model_decision_resumes_same_job_with_original_settings_snapshot(tmp_pat
     assert completed["analysis_id"] == analysis_id
     assert analysis["settings"]["beam_size"] == 5
     assert analysis["cache"]["reuse_enabled"] is False
+    assert analysis["cache"]["processing_mode"] == pipeline.FORCE_FULL_REPROCESS
 
     events = list_analysis_job_events(db, job_id)
     event_names = [event["event"] for event in events]
@@ -114,6 +116,33 @@ def test_model_decision_resumes_same_job_with_original_settings_snapshot(tmp_pat
     assert "transcription.skip_requested" in event_names
     assert "transcription.skipped" in event_names
     assert event_names[-1] == "job.completed"
+
+
+def test_force_full_reprocess_never_reads_prior_evidence(tmp_path: Path, monkeypatch) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"video")
+    db = tmp_path / "highlightminer.db"
+    _stub_pipeline(monkeypatch)
+    monkeypatch.setattr(
+        pipeline,
+        "load_reusable_features",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("full reprocess read prior evidence")
+        ),
+    )
+
+    analysis_id = pipeline.analyze_vod(
+        video,
+        tmp_path,
+        Settings(),
+        db_path=db,
+        reuse_features=False,
+        skip_transcription=True,
+    )
+
+    analysis = load_analysis(db, analysis_id)
+    assert analysis["cache"]["processing_mode"] == pipeline.FORCE_FULL_REPROCESS
+    assert analysis["cache"]["reused_stages"] == []
 
 
 def test_pipeline_failure_marks_job_failed_with_error_event(tmp_path: Path, monkeypatch) -> None:

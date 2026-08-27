@@ -18,6 +18,7 @@ SCHEMA_VERSION = 3
 FEATURE_SCHEMA_VERSION = 2
 ALGORITHM_VERSION = "heuristic-v1"
 DATABASE_FILENAME = "highlightminer.db"
+SUPPORTED_ANALYSIS_SOURCE_VERSIONS = frozenset({1, 2})
 
 
 def utc_now() -> str:
@@ -381,6 +382,7 @@ def find_source_runs(
             """
             SELECT
                 a.id, a.created_at, a.run_number, a.content_label, a.video_name,
+                a.source_fingerprint, a.source_version, a.feature_schema_version,
                 COUNT(c.candidate_id) AS candidates,
                 SUM(CASE WHEN r.status = 'keep' THEN 1 ELSE 0 END) AS kept,
                 SUM(CASE WHEN r.status = 'reject' THEN 1 ELSE 0 END) AS rejected,
@@ -395,7 +397,33 @@ def find_source_runs(
             """,
             (source_row["id"],),
         ).fetchall()
-    return source_row, [dict(row) for row in rows]
+    runs = [dict(row) for row in rows]
+    for run in runs:
+        run["compatible"] = analysis_run_is_compatible(
+            run,
+            expected_source_fingerprint=str(source_row["fingerprint"]),
+        )
+    return source_row, runs
+
+
+def analysis_run_is_compatible(
+    run: dict[str, Any],
+    *,
+    expected_source_fingerprint: str | None = None,
+) -> bool:
+    """Return whether this completed analysis can be loaded by this app build."""
+    if expected_source_fingerprint is not None:
+        if str(run.get("source_fingerprint") or "") != expected_source_fingerprint:
+            return False
+    try:
+        source_version = int(run.get("source_version", 0))
+        feature_schema_version = int(run.get("feature_schema_version", 0))
+    except (TypeError, ValueError):
+        return False
+    return (
+        source_version in SUPPORTED_ANALYSIS_SOURCE_VERSIONS
+        and 0 < feature_schema_version <= FEATURE_SCHEMA_VERSION
+    )
 
 
 def _feature_rows(conn: sqlite3.Connection, table: str, analysis_id: str) -> list[dict[str, Any]]:
