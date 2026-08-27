@@ -93,7 +93,7 @@ HighlightMiner.exe
       └── opens the UI inside a pywebview/WebView2 desktop window
 ```
 
-Closing the native window shuts down the Streamlit child and exits HighlightMiner. The **Exit HighlightMiner** button inside the UI does the same thing.
+Closing the native window shuts down the Streamlit child and exits HighlightMiner. The **Exit HighlightMiner** button inside the UI does the same thing. While a non-cancellable analysis or export stage is active, both shutdown paths stay locked until the work finishes or reaches a safe waiting state.
 
 For troubleshooting, the browser presentation remains available explicitly:
 

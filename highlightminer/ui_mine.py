@@ -18,6 +18,7 @@ from .analysis_history import AnalysisDeletionBlocked, analysis_deletion_impact,
 from .analysis_identity import load_analysis_identities, load_analysis_identity, save_analysis_title
 from .categorization import normalize_content_label
 from .config import Settings
+from .desktop import active_work_shutdown_block_reason
 from .export import PreviewFileLockError, create_preview_clip, export_clip
 from .export_queue import (
     ExportBatchAlreadyRunning,
@@ -1207,7 +1208,7 @@ def render_mine_page(db_path: Path) -> None:
         )
         _render_history_sidebar(db_path, disabled=controls_locked)
         st.caption(f"Database: `{db_path}`")
-        render_shutdown()
+        render_shutdown(block_reason=active_work_shutdown_block_reason(db_path))
 
     error = st.session_state.pop("analysis_error", None)
     if error:

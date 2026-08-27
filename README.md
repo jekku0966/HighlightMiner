@@ -9,7 +9,7 @@ HighlightMiner analyzes long VODs using audio excitement, optional local Whisper
 
 ## Windows desktop UI
 
-On Windows, Streamlit is hosted inside a native HighlightMiner window using pywebview + Microsoft Edge WebView2. Double-clicking `HighlightMiner.exe` does not need to open a normal browser tab. Closing the native window or using **Exit HighlightMiner** shuts down the local Streamlit process.
+On Windows, Streamlit is hosted inside a native HighlightMiner window using pywebview + Microsoft Edge WebView2. Double-clicking `HighlightMiner.exe` does not need to open a normal browser tab. Closing the native window or using **Exit HighlightMiner** shuts down the local Streamlit process when no non-cancellable analysis/export stage is active; active work keeps shutdown locked until it reaches a safe state.
 
 Browser fallback remains available:
 

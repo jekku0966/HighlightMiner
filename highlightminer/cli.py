@@ -12,6 +12,7 @@ from pathlib import Path
 from .config import Settings
 from .desktop import (
     UI_URL,
+    active_work_shutdown_block_reason,
     desktop_runtime_probe,
     open_system_browser,
     resolve_ui_mode,
@@ -198,6 +199,7 @@ def cmd_ui(args: argparse.Namespace | None = None) -> int:
                     shutdown_file,
                     url=UI_URL,
                     stop_backend=lambda: _stop_ui_process(process),
+                    shutdown_blocker=lambda: active_work_shutdown_block_reason(default_db_path()),
                 )
                 shutdown_requested = shutdown_file.exists()
                 desktop_closed_normally = process.poll() is None or shutdown_requested

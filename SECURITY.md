@@ -40,8 +40,8 @@ On Windows, v0.2 hosts the Streamlit interface in a pywebview window using Micro
 - Streamlit runs headlessly and does not launch a normal browser during the default desktop flow.
 - pywebview is forced to its modern `edgechromium` / WebView2 backend; HighlightMiner does not silently fall back to legacy MSHTML.
 - Normal external links are opened by the system browser rather than turning the embedded HighlightMiner window into a general-purpose browser.
-- Closing the native window terminates the Streamlit child process.
-- The in-app **Exit HighlightMiner** request closes both the native window and backend.
+- Closing the native window terminates the Streamlit child process when no non-cancellable analysis/export stage is active.
+- The in-app **Exit HighlightMiner** request closes both the native window and backend. Both shutdown paths are locked while terminating the shared backend would interrupt active work.
 
 The embedded window does not make the Streamlit application safe to expose remotely. Do not bind it to `0.0.0.0`, a LAN address, or a public interface without authentication and a separate threat-model review.
 

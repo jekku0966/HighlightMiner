@@ -167,12 +167,16 @@ def persistent_text_input(
     return str(st.session_state.get(state_key, ""))
 
 
-def render_shutdown() -> None:
+def render_shutdown(*, block_reason: str | None = None) -> None:
     shutdown_file = os.environ.get("HIGHLIGHTMINER_SHUTDOWN_FILE")
     if not shutdown_file:
         return
     st.divider()
-    if st.button("🛑 Exit HighlightMiner", width="stretch"):
+    if st.button(
+        "🛑 Exit HighlightMiner",
+        width="stretch",
+        disabled=bool(block_reason),
+    ):
         try:
             Path(shutdown_file).write_text("shutdown\n", encoding="utf-8")
         except OSError as exc:
@@ -180,3 +184,5 @@ def render_shutdown() -> None:
         else:
             st.info("Shutting down HighlightMiner…")
             st.stop()
+    if block_reason:
+        st.caption(f"🔒 {block_reason}")
