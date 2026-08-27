@@ -3,6 +3,28 @@ from __future__ import annotations
 import pytest
 
 from highlightminer.timestamps import normalize_clip_bounds
+from highlightminer.util import format_time
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0.0, "00:00:00"),
+        (12.0, "00:00:12"),
+        (12.5, "00:00:12.5"),
+        (12.05, "00:00:12.05"),
+        (12.005, "00:00:12.005"),
+        (62.25, "00:01:02.25"),
+        (3661.001, "01:01:01.001"),
+        (59.9996, "00:01:00"),
+        (-1.0, "00:00:00"),
+    ],
+)
+def test_display_timestamp_omits_only_redundant_fractional_zeroes(
+    seconds: float,
+    expected: str,
+) -> None:
+    assert format_time(seconds) == expected
 
 
 def test_fractional_duration_overshoot_is_silently_clamped() -> None:

@@ -31,6 +31,11 @@ def save_json(path: str | Path, data: Any) -> None:
 
 
 def format_time(seconds: float) -> str:
+    """Format a media timestamp to milliseconds without redundant zeroes.
+
+    This is presentation-only: callers retain the original numeric timestamp
+    for review, preview, and export boundaries.
+    """
     seconds = max(0.0, float(seconds))
     whole = int(seconds)
     ms = int(round((seconds - whole) * 1000))
@@ -39,7 +44,8 @@ def format_time(seconds: float) -> str:
         ms = 0
     h, rem = divmod(whole, 3600)
     m, s = divmod(rem, 60)
-    return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+    fraction = f".{ms:03d}".rstrip("0") if ms else ""
+    return f"{h:02d}:{m:02d}:{s:02d}{fraction}"
 
 
 def parse_time(value: Any) -> float | None:
