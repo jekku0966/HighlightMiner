@@ -22,6 +22,7 @@ from highlightminer.ui_settings import (
     _editor_needs_seed,
     _model_editor_values,
 )
+from highlightminer.ui_style import MODEL_ACCESS_CHOICES_KEY, model_access_choices_css
 
 
 def test_widget_backing_state_survives_streamlit_widget_cleanup() -> None:
@@ -56,6 +57,21 @@ def test_analysis_deletion_requires_the_full_exact_id() -> None:
     assert ui_mine._analysis_delete_confirmation_matches(analysis_id, " analysis-123 ") is True
     assert ui_mine._analysis_delete_confirmation_matches(analysis_id, "analysis") is False
     assert ui_mine._analysis_delete_confirmation_matches(analysis_id, "") is False
+
+
+def test_model_access_choice_row_has_scoped_equal_height_and_explicit_wrap() -> None:
+    css = model_access_choices_css()
+
+    assert f".st-key-{MODEL_ACCESS_CHOICES_KEY}" in css
+    assert "height: 3.5rem" in css
+    assert "flex-direction: row !important" in css
+    assert "flex-wrap: nowrap" in css
+    assert "flex: 0 0 12rem !important" in css
+    assert "white-space: pre-line" in css
+    assert ui_mine._CONTINUE_WITHOUT_SPEECH_LABEL.splitlines() == [
+        "Continue without",
+        "speech",
+    ]
 
 
 def test_candidate_table_formats_bounds_without_changing_review_values() -> None:
