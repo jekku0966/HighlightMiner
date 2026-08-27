@@ -29,7 +29,11 @@ def _render_app() -> None:
             level=logging.WARNING,
             job_ids=recovered_jobs,
         )
-    running = analysis_is_running()
+        st.session_state.setdefault(
+            "analysis_error",
+            f"Recovered {len(recovered_jobs)} analysis job(s) whose worker heartbeat expired.",
+        )
+    running = analysis_is_running(db_path)
 
     with st.container(border=True):
         st.title("⛏️ HighlightMiner")
@@ -51,7 +55,10 @@ def _render_app() -> None:
             disabled=running,
         )
         if running:
-            st.caption("🔒 Analysis in progress. Settings are locked until this run finishes or stops with an error/model decision.")
+            st.caption(
+                "🔒 Analysis controls are locked until the active run finishes, fails, "
+                "or is safely cancelled while waiting for input."
+            )
 
     if running:
         page = _NAV_ITEMS[0]

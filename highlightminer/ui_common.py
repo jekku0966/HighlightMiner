@@ -124,11 +124,20 @@ def browse_into_state(state_key: str, title: str, *, folder: bool = False, file_
         st.session_state["native_dialog_error"] = str(exc)
 
 
-def path_picker(label: str, state_key: str, *, default: str = "", placeholder: str | None = None, folder: bool = False, file_filter: str = "All files|*.*") -> str:
+def path_picker(
+    label: str,
+    state_key: str,
+    *,
+    default: str = "",
+    placeholder: str | None = None,
+    folder: bool = False,
+    file_filter: str = "All files|*.*",
+    disabled: bool = False,
+) -> str:
     hydrate_persistent_widget(st.session_state, state_key, default)
     path_col, browse_col = st.columns([4, 1], vertical_alignment="bottom")
     with path_col:
-        st.text_input(label, key=state_key, placeholder=placeholder)
+        st.text_input(label, key=state_key, placeholder=placeholder, disabled=disabled)
     with browse_col:
         st.button(
             "Browse",
@@ -137,6 +146,7 @@ def path_picker(label: str, state_key: str, *, default: str = "", placeholder: s
             on_click=browse_into_state,
             args=(state_key, f"Choose {label}"),
             kwargs={"folder": folder, "file_filter": file_filter},
+            disabled=disabled,
         )
     persist_widget_value(st.session_state, state_key)
     return str(st.session_state.get(state_key, ""))
@@ -149,9 +159,10 @@ def persistent_text_input(
     default: str = "",
     placeholder: str | None = None,
     help: str | None = None,
+    disabled: bool = False,
 ) -> str:
     hydrate_persistent_widget(st.session_state, state_key, default)
-    st.text_input(label, key=state_key, placeholder=placeholder, help=help)
+    st.text_input(label, key=state_key, placeholder=placeholder, help=help, disabled=disabled)
     persist_widget_value(st.session_state, state_key)
     return str(st.session_state.get(state_key, ""))
 
