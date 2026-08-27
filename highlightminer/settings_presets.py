@@ -25,14 +25,3 @@ def detect_weight_preset(weights: dict[str, float], *, tolerance: float = 0.005)
         if all(abs(normalized[key] - expected[key]) <= tolerance for key in expected):
             return name
     return "Custom"
-
-
-def preset_is_pending(preset: str, weights: dict[str, float]) -> bool:
-    """Return whether a selected built-in preset differs from editor weights."""
-    return preset in WEIGHT_PRESETS and detect_weight_preset(weights) != preset
-
-
-def preset_preview(preset: str) -> dict[str, float] | None:
-    """Return normalized display weights for a built-in preset."""
-    values = WEIGHT_PRESETS.get(preset)
-    return normalize_weights(values) if values is not None else None

@@ -11,7 +11,7 @@ Open **⚙️ Settings** from the HighlightMiner sidebar. The page is split into
 - **Reaction phrases** — one phrase per line;
 - **Import / Export** — migrate, back up, or share a JSON settings profile.
 
-Press **Save settings** to make the normal editor state active. Saved changes apply to future analysis runs and reruns. Existing analyses retain the exact settings snapshot they were created with.
+Press **Save analysis settings** to make the normal editor state active. Saved changes apply to future analysis runs and reruns. Existing analyses retain the exact settings snapshot they were created with. Model Access has its own save action because download consent and a manually selected local model are database-local security state, not part of the portable analysis profile.
 
 VOD, chat, Content / Game, and work-folder selections on the Mine page are kept when you visit Settings and return. Settings widgets are rehydrated from the saved SQLite profile if Streamlit recreated them, so navigating between pages does not replace saved values with widget defaults.
 
@@ -54,6 +54,8 @@ The normal model selector intentionally keeps the common choices short and order
 ## Weighting presets
 
 Presets change **only** the three signal weights. They never silently alter Whisper settings, thresholds, clip length, or timing.
+
+Selecting a built-in preset immediately fills the three weight sliders. It does not write to the database by itself; the same single **Save analysis settings** action used for every other analysis setting makes the edited values active. There is no separate preset apply/save step.
 
 | Preset | Audio | Transcript / reaction | Chat |
 |---|---:|---:|---:|

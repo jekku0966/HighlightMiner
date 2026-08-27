@@ -1,19 +1,50 @@
-from highlightminer.settings_presets import WEIGHT_PRESETS, preset_is_pending, preset_preview
+from highlightminer import ui_settings
+from highlightminer.settings_presets import WEIGHT_PRESETS
 
 
-def test_selected_preset_is_pending_until_editor_weights_match() -> None:
-    assert not preset_is_pending("Balanced", WEIGHT_PRESETS["Balanced"])
-    assert preset_is_pending("Audio-heavy", WEIGHT_PRESETS["Balanced"])
-    assert not preset_is_pending("Custom", {"audio": 0.5, "transcript": 0.3, "chat": 0.2})
+def _editor_state(*, preset: str, weights: dict[str, float]) -> dict[str, object]:
+    keys = ui_settings._EDITOR_KEYS
+    return {
+        keys["preset"]: preset,
+        keys["audio_weight"]: weights["audio"],
+        keys["transcript_weight"]: weights["transcript"],
+        keys["chat_weight"]: weights["chat"],
+    }
 
 
-def test_pending_preset_accepts_tolerance_and_unknown_names() -> None:
-    near_audio_heavy = {"audio": 0.599, "transcript": 0.25, "chat": 0.15}
-    assert not preset_is_pending("Audio-heavy", near_audio_heavy)
-    assert not preset_is_pending("Nonexistent", WEIGHT_PRESETS["Balanced"])
+def test_selecting_preset_immediately_fills_weight_editor_without_saving(monkeypatch) -> None:
+    state = _editor_state(preset="Audio-heavy", weights=WEIGHT_PRESETS["Balanced"])
+    monkeypatch.setattr(ui_settings.st, "session_state", state)
+    monkeypatch.setattr(
+        ui_settings,
+        "save_app_settings",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("preset selection persisted")),
+    )
+
+    ui_settings._apply_selected_preset()
+
+    keys = ui_settings._EDITOR_KEYS
+    assert state[keys["audio_weight"]] == 0.60
+    assert state[keys["transcript_weight"]] == 0.25
+    assert state[keys["chat_weight"]] == 0.15
 
 
-def test_preset_preview_exposes_selected_weights_before_apply() -> None:
-    preview = preset_preview("Audio-heavy")
-    assert preview == {"audio": 0.60, "transcript": 0.25, "chat": 0.15}
-    assert preset_preview("Custom") is None
+def test_manual_weight_edit_updates_preset_selector(monkeypatch) -> None:
+    state = _editor_state(
+        preset="Audio-heavy",
+        weights={"audio": 0.5, "transcript": 0.3, "chat": 0.2},
+    )
+    monkeypatch.setattr(ui_settings.st, "session_state", state)
+
+    ui_settings._sync_preset_to_weights()
+
+    assert state[ui_settings._EDITOR_KEYS["preset"]] == "Custom"
+
+
+def test_manual_weights_that_match_preset_restore_its_name(monkeypatch) -> None:
+    state = _editor_state(preset="Custom", weights=WEIGHT_PRESETS["Reaction-heavy"])
+    monkeypatch.setattr(ui_settings.st, "session_state", state)
+
+    ui_settings._sync_preset_to_weights()
+
+    assert state[ui_settings._EDITOR_KEYS["preset"]] == "Reaction-heavy"

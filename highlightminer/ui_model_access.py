@@ -62,6 +62,10 @@ def render_model_access_settings(db_path: Path) -> None:
     _sync_editor_with_persisted(preferences)
 
     st.subheader("Model access")
+    st.caption(
+        "Download permission and local-model selection are local security controls. "
+        "Save them here separately from the analysis settings below."
+    )
     notice = st.session_state.pop(_MODEL_ACCESS_NOTICE_KEY, None)
     if notice:
         st.success(notice)
