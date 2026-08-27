@@ -14,6 +14,7 @@ from .analysis_jobs import (
     list_analysis_job_events,
     load_analysis_job,
 )
+from .analysis_history import AnalysisDeletionBlocked, analysis_deletion_impact, delete_analysis
 from .analysis_identity import load_analysis_identities, load_analysis_identity, save_analysis_title
 from .categorization import normalize_content_label
 from .config import Settings
@@ -71,6 +72,7 @@ _QUEUED_ANALYSIS_KEY = "queued_analysis"
 _ANALYSIS_RUNNING_KEY = "analysis_running"
 _PREVIEW_ACTIVE_KEY = "preview_active_candidate"
 _PREVIEW_CLOSED_KEY = "preview_closed"
+_PENDING_DELETE_ANALYSIS_KEY = "pending_delete_analysis_id"
 
 
 def analysis_is_running(db_path: Path | None = None) -> bool:
@@ -239,6 +241,10 @@ def _history_label(row: dict, identity: dict[str, str]) -> str:
 def _latest_compatible_run(runs: list[dict]) -> dict | None:
     """Runs arrive newest-first; incompatible future formats are skipped."""
     return next((run for run in runs if bool(run.get("compatible", True))), None)
+
+
+def _analysis_delete_confirmation_matches(analysis_id: str, entered: str) -> bool:
+    return bool(analysis_id) and str(entered).strip() == str(analysis_id)
 
 
 def _run_analysis_ui(
@@ -725,9 +731,95 @@ def _render_history_sidebar(db_path: Path, *, disabled: bool = False) -> None:
         default_index = ids.index(current_id) if current_id in ids else 0
         selected = st.selectbox("Recent analyses", labels, index=default_index, disabled=disabled)
         selected_id = ids[labels.index(selected)]
-        if st.button("Load selected analysis", width="stretch", disabled=disabled):
+        load_button, delete_button = st.columns(2)
+        if load_button.button("Load selected", width="stretch", disabled=disabled):
             st.session_state.analysis_id = selected_id
             st.rerun()
+        if delete_button.button("Delete…", width="stretch", disabled=disabled):
+            st.session_state[_PENDING_DELETE_ANALYSIS_KEY] = selected_id
+            st.rerun()
+
+        pending_delete = st.session_state.get(_PENDING_DELETE_ANALYSIS_KEY)
+        if pending_delete:
+            try:
+                impact = analysis_deletion_impact(db_path, str(pending_delete))
+            except KeyError:
+                st.session_state.pop(_PENDING_DELETE_ANALYSIS_KEY, None)
+                st.warning("That analysis no longer exists.")
+            else:
+                with st.container(border=True):
+                    title = impact["analysis_title"] or f"run {impact['run_number']}"
+                    st.warning(
+                        f"Permanently delete **{impact['video_name']} · {title}**? "
+                        "Completed analyses are otherwise immutable."
+                    )
+                    st.caption(
+                        f"This removes {impact['candidates']} candidates, "
+                        f"{impact['kept']} kept / {impact['rejected']} rejected / "
+                        f"{impact['unreviewed']} unreviewed labels, "
+                        f"{impact['review_events']} review events, {impact['exports']} export-history records, "
+                        f"and {impact['queue_items']} export-queue entries."
+                    )
+                    st.caption(
+                        "Transcript/audio/chat evidence belonging to this run is also removed "
+                        f"({impact['transcript_segments']} transcript segments, "
+                        f"{impact['audio_features']} audio features, "
+                        f"{impact['chat_features']} chat features). "
+                        "Already exported video files remain on disk. Other runs—even for the same VOD—are untouched."
+                    )
+                    st.code(str(pending_delete))
+                    entered_id = st.text_input(
+                        "Type the full analysis ID shown above to confirm",
+                        key=f"delete_analysis_id_input_{pending_delete}",
+                        disabled=disabled,
+                    )
+                    understood = st.checkbox(
+                        "I understand that this analysis and its review/learning history cannot be recovered.",
+                        key=f"confirm_delete_analysis_{pending_delete}",
+                        disabled=disabled,
+                    )
+                    cancel, confirm = st.columns(2)
+                    if cancel.button(
+                        "Cancel",
+                        key=f"cancel_delete_analysis_{pending_delete}",
+                        disabled=disabled,
+                        width="stretch",
+                    ):
+                        st.session_state.pop(_PENDING_DELETE_ANALYSIS_KEY, None)
+                        st.rerun()
+                    if confirm.button(
+                        "Delete permanently",
+                        key=f"confirm_delete_analysis_button_{pending_delete}",
+                        disabled=(
+                            disabled
+                            or not understood
+                            or not _analysis_delete_confirmation_matches(
+                                str(pending_delete),
+                                entered_id,
+                            )
+                        ),
+                        width="stretch",
+                    ):
+                        try:
+                            deleted = delete_analysis(
+                                db_path,
+                                str(pending_delete),
+                                acknowledged=understood,
+                                confirmed_analysis_id=entered_id.strip(),
+                            )
+                        except (AnalysisDeletionBlocked, KeyError) as exc:
+                            st.error(str(exc))
+                        else:
+                            if st.session_state.get("analysis_id") == pending_delete:
+                                st.session_state.pop("analysis_id", None)
+                            st.session_state.pop(_PENDING_DELETE_ANALYSIS_KEY, None)
+                            st.session_state.pop(_PREVIEW_ACTIVE_KEY, None)
+                            st.session_state.pop(_PREVIEW_CLOSED_KEY, None)
+                            st.session_state["analysis_notice"] = (
+                                f"Deleted {deleted['video_name']} run {deleted['run_number']}. "
+                                "Other analyses and exported video files were kept."
+                            )
+                            st.rerun()
     else:
         st.caption("No SQLite analyses yet.")
 

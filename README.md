@@ -29,6 +29,8 @@ Because HighlightMiner is open source, third parties can still build their own e
 
 v0.2 keeps structured state in `highlightminer.db`: analyses, candidates, transcript/audio/chat features, source/run history, Keep/Reject/Unreviewed reviews, timing/title edits, review events, the persistent export queue and export history, and the active desktop-app settings profile.
 
+Completed analyses are immutable history entries. A selected run can be permanently deleted only through an impact preview and explicit confirmation; its candidates, evidence, review/learning labels, database export history, and queue entries are removed together. Other runs remain unchanged, source run numbers are never reused, and already exported video files stay on disk. History remains global while the current-VOD-versus-global presentation question is evaluated with testers.
+
 ```text
 HighlightMiner/
 ├── HighlightMiner.exe
