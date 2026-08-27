@@ -49,5 +49,5 @@ def test_export_clip_uses_content_subfolder(tmp_path: Path, monkeypatch) -> None
         category="Overwatch 2",
     )
 
-    assert out == tmp_path / "clips" / "Overwatch 2" / "H001_nice_play.mp4"
+    assert out == tmp_path / "clips" / "Overwatch 2" / "nice_play.mp4"
     assert out.read_bytes() == b"clip"

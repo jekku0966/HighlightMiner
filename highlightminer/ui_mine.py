@@ -18,6 +18,24 @@ from .analysis_identity import load_analysis_identities, load_analysis_identity,
 from .categorization import normalize_content_label
 from .config import Settings
 from .export import PreviewFileLockError, create_preview_clip, export_clip
+from .export_queue import (
+    ExportBatchAlreadyRunning,
+    ExportBatchHeartbeat,
+    ExportQueueStateError,
+    clear_export_queue,
+    complete_export_queue_item,
+    enqueue_export_items,
+    fail_export_queue_item,
+    finish_export_batch,
+    interrupt_export_batch,
+    list_export_queue,
+    load_active_export_batch,
+    recover_stale_export_batches,
+    remove_export_queue_item,
+    retry_failed_export_items,
+    start_export_batch,
+    update_export_queue_title,
+)
 from .model_access import (
     ModelAccessPreferences,
     ModelDecisionRequired,
@@ -33,7 +51,7 @@ from .review import load_review, save_review
 from .security import validate_chat_file, validate_local_video
 from .settings_presets import detect_weight_preset, normalize_weights
 from .settings_store import load_app_settings
-from .storage import find_source_runs, import_legacy_analysis, learning_summary, list_analyses, load_analysis, record_export
+from .storage import find_source_runs, import_legacy_analysis, learning_summary, list_analyses, load_analysis
 from .transcription_status import is_transcription_skipped
 from .ui_common import (
     _CHAT_FILTER,
@@ -587,11 +605,16 @@ def _render_analysis_controls(
     work_dir: str,
     *,
     active_job: dict | None = None,
+    disabled: bool = False,
 ) -> None:
     if active_job is not None:
         _render_analysis_job_status(db_path, active_job)
         if active_job["status"] == "awaiting_input":
             _render_model_decision(db_path)
+        return
+
+    if disabled:
+        st.info("Analysis controls are locked while the export worker is active.")
         return
 
     if _render_model_decision(db_path):
@@ -770,6 +793,11 @@ def _render_review(db_path: Path) -> None:
 
     st.subheader("⛏️ Ranked candidates")
     st.dataframe(_candidate_rows(analysis, review), width="stretch", hide_index=True)
+    if load_active_export_batch(db_path) is not None:
+        st.info(
+            "Candidate preview and review controls are locked while the export worker uses the staged queue snapshot."
+        )
+        return
     labels = [f"{c['id']} · {c['score'] * 10:.1f}/10 · {format_time(c['peak_time'])} · {c['reason']}" for c in candidates]
     selected_label = st.selectbox("Review candidate", labels)
     candidate = candidates[labels.index(selected_label)]
@@ -853,36 +881,202 @@ def _render_review(db_path: Path) -> None:
         item.update(start=start, end=preview_end, title=title); save_review(db_path, analysis_id, review); st.success("Saved")
 
     st.divider()
-    st.subheader("📦 Export")
-    export_dir = path_picker("Export folder", "export_dir_input", default=str(Path(analysis["work_dir"]) / "clips"), folder=True)
-    st.caption(f"Kept clips from this analysis will export under **{content_label}**. Existing files are never overwritten.")
+    st.subheader("📦 Add to export queue")
+    export_running = load_active_export_batch(db_path) is not None
+    export_dir = path_picker(
+        "Export folder",
+        "export_dir_input",
+        default=str(Path(analysis["work_dir"]) / "clips"),
+        folder=True,
+        disabled=export_running,
+    )
+    st.caption(
+        f"Kept clips from this analysis will be queued under **{content_label}**. "
+        "Queueing does not start FFmpeg."
+    )
     kept = [(c, review["items"][c["id"]]) for c in candidates if review["items"][c["id"]].get("status") == "keep"]
-    if st.button(f"Export {len(kept)} kept clip(s)", disabled=not kept, type="primary"):
-        exported = []
-        progress = st.progress(0.0)
-        source_video = validate_local_video(analysis["video_path"])
-        for n, (candidate, review_item) in enumerate(kept, start=1):
-            out = export_clip(
-                source_video,
+    if st.button(
+        f"Add {len(kept)} kept clip(s) to queue",
+        disabled=not kept or export_running,
+        type="primary",
+    ):
+        try:
+            result = enqueue_export_items(
+                db_path,
+                analysis,
+                [
+                    {
+                        "candidate_id": candidate["id"],
+                        "start": review_item["start"],
+                        "end": review_item["end"],
+                        "title": review_item.get("title") or "",
+                        "content_label": candidate.get("content_label") or content_label,
+                    }
+                    for candidate, review_item in kept
+                ],
                 export_dir,
-                candidate["id"],
-                review_item["start"],
-                review_item["end"],
-                review_item.get("title") or None,
-                category=candidate.get("content_label") or analysis.get("content_label"),
             )
-            record_export(db_path, analysis_id, candidate["id"], out)
-            exported.append(str(out))
-            progress.progress(n / len(kept))
-        st.success(f"Exported {len(exported)} clip(s) to {Path(exported[0]).parent.resolve()}")
-        st.code("\n".join(exported))
+            message = f"Added {result['added']} clip(s) to the export queue."
+            if result["skipped"]:
+                message += f" Skipped {result['skipped']} duplicate(s)."
+            st.session_state["export_notice"] = message
+            st.rerun()
+        except Exception as exc:
+            st.exception(exc)
+
+
+def _execute_export_queue(db_path: Path) -> None:
+    try:
+        batch, items = start_export_batch(db_path)
+    except (ExportBatchAlreadyRunning, ExportQueueStateError) as exc:
+        st.session_state["export_error"] = str(exc)
+        st.rerun()
+        return
+
+    batch_id = str(batch["id"])
+    heartbeat = ExportBatchHeartbeat(db_path, batch_id)
+    overall = st.progress(0.0)
+    current = st.empty()
+    failures = 0
+    try:
+        heartbeat.start()
+        for index, item in enumerate(items, start=1):
+            current.write(
+                f"Exporting **{item['source_name']} · {item['candidate_id']}** "
+                f"({index}/{len(items)})"
+            )
+            try:
+                source_video = validate_local_video(item["source_path"])
+                output = export_clip(
+                    source_video,
+                    item["export_dir"],
+                    item["candidate_id"],
+                    item["start"],
+                    item["end"],
+                    item.get("title") or None,
+                    category=item.get("content_label"),
+                )
+                complete_export_queue_item(db_path, batch_id, item["id"], output)
+            except Exception as exc:
+                failures += 1
+                fail_export_queue_item(db_path, batch_id, item["id"], exc)
+            overall.progress(index / len(items))
+        finished = finish_export_batch(db_path, batch_id)
+    except Exception as exc:
+        interrupt_export_batch(db_path, batch_id, exc)
+        st.session_state["export_error"] = f"{type(exc).__name__}: {exc}"
+        st.rerun()
+        return
+    finally:
+        heartbeat.stop()
+
+    if failures:
+        st.session_state["export_error"] = str(finished["message"])
+    else:
+        st.session_state["export_notice"] = str(finished["message"])
+    st.rerun()
+
+
+def _render_export_queue(db_path: Path) -> None:
+    st.divider()
+    st.subheader("📦 Export queue")
+    active = load_active_export_batch(db_path)
+    items = list_export_queue(db_path)
+    if not items:
+        st.caption("The queue is empty. Keep clips in an analysis, then add them here before exporting.")
+        return
+
+    completed = sum(item["status"] == "completed" for item in items)
+    failed = sum(item["status"] == "failed" for item in items)
+    queued = sum(item["status"] == "queued" for item in items)
+    exporting = sum(item["status"] == "exporting" for item in items)
+    st.caption(
+        f"{queued} queued · {exporting} exporting · {completed} completed · {failed} failed"
+    )
+    finished_count = completed + failed
+    st.progress(finished_count / len(items) if items else 0.0)
+
+    locked = active is not None
+    if locked:
+        st.info(
+            "An export batch is running. Queue controls stay locked until it finishes or its worker heartbeat expires. "
+            "No cosmetic Stop button is shown."
+        )
+
+    for item in items:
+        with st.container(border=True):
+            info, title_column, actions = st.columns([3, 4, 2], vertical_alignment="bottom")
+            info.markdown(f"**{item['source_name']} · {item['candidate_id']}**")
+            info.caption(
+                f"{format_time(float(item['start']))} → {format_time(float(item['end']))} · "
+                f"{str(item['status']).title()}"
+            )
+            edited_title = title_column.text_input(
+                "Output title",
+                value=str(item.get("title") or ""),
+                key=f"export_queue_title_{item['id']}",
+                disabled=locked or item["status"] == "completed",
+                placeholder=str(item["candidate_id"]),
+            )
+            save, remove = actions.columns(2)
+            if save.button(
+                "Save",
+                key=f"save_export_queue_{item['id']}",
+                disabled=locked or item["status"] == "completed" or edited_title == str(item.get("title") or ""),
+                width="stretch",
+            ):
+                update_export_queue_title(db_path, item["id"], edited_title)
+                st.rerun()
+            if remove.button(
+                "Remove",
+                key=f"remove_export_queue_{item['id']}",
+                disabled=locked,
+                width="stretch",
+            ):
+                remove_export_queue_item(db_path, item["id"])
+                st.rerun()
+            if item.get("error_message"):
+                st.error(str(item["error_message"]))
+            if item.get("output_path"):
+                st.code(str(item["output_path"]))
+
+    start, retry, clear, refresh = st.columns(4)
+    if start.button(
+        f"Export {queued} queued clip(s)",
+        type="primary",
+        disabled=locked or queued == 0,
+        width="stretch",
+    ):
+        _execute_export_queue(db_path)
+    if retry.button(
+        f"Retry {failed} failed",
+        disabled=locked or failed == 0,
+        width="stretch",
+    ):
+        count = retry_failed_export_items(db_path)
+        st.session_state["export_notice"] = f"Returned {count} failed clip(s) to the queue."
+        st.rerun()
+    if clear.button("Clear queue", disabled=locked, width="stretch"):
+        count = clear_export_queue(db_path)
+        st.session_state["export_notice"] = f"Cleared {count} queue item(s). Exported files and history were kept."
+        st.rerun()
+    if refresh.button("Refresh", disabled=not locked, width="stretch"):
+        st.rerun()
 
 
 def render_mine_page(db_path: Path) -> None:
+    recovered_exports = recover_stale_export_batches(db_path)
+    if recovered_exports:
+        st.session_state.setdefault(
+            "export_error",
+            f"Recovered {len(recovered_exports)} export batch(es) whose worker heartbeat expired. "
+            "Failed items are still in the queue for retry.",
+        )
     _restore_persistent_analysis_state(db_path)
     _run_queued_analysis(db_path)
     active_job = find_active_analysis_job(db_path)
-    controls_locked = active_job is not None
+    active_export = load_active_export_batch(db_path)
+    controls_locked = active_job is not None or active_export is not None
 
     with st.sidebar:
         video_path, chat_path, content_label, analysis_title, work_dir = _render_source_sidebar(
@@ -897,6 +1091,7 @@ def render_mine_page(db_path: Path) -> None:
             analysis_title,
             work_dir,
             active_job=active_job,
+            disabled=active_export is not None,
         )
         _render_history_sidebar(db_path, disabled=controls_locked)
         st.caption(f"Database: `{db_path}`")
@@ -909,3 +1104,10 @@ def render_mine_page(db_path: Path) -> None:
     if notice:
         st.success(notice)
     _render_review(db_path)
+    export_error = st.session_state.pop("export_error", None)
+    if export_error:
+        st.error(f"Export queue: {export_error}")
+    export_notice = st.session_state.pop("export_notice", None)
+    if export_notice:
+        st.success(export_notice)
+    _render_export_queue(db_path)

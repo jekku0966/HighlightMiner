@@ -62,10 +62,15 @@ def test_pre_source_v02_database_migrates_in_place(tmp_path: Path) -> None:
             row[0]
             for row in migrated.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
         }
-        assert {"analysis_jobs", "analysis_job_events"} <= tables
+        assert {
+            "analysis_jobs",
+            "analysis_job_events",
+            "export_batches",
+            "export_queue_items",
+        } <= tables
         assert migrated.execute(
             "SELECT value FROM metadata WHERE key = 'schema_version'"
-        ).fetchone()[0] == "3"
+        ).fetchone()[0] == "4"
 
     source, runs = find_source_runs(db, video)
     assert source["fingerprint"]
