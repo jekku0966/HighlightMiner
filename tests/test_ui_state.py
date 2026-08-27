@@ -1,7 +1,15 @@
+from datetime import datetime, timezone
+from pathlib import Path
+
 from highlightminer import ui_mine
-from highlightminer.analysis_jobs import AnalysisJobTerminalError
+from highlightminer.analysis_jobs import (
+    AnalysisJobStateError,
+    AnalysisJobTerminalError,
+    load_analysis_job,
+)
 from highlightminer.config import Settings
 from highlightminer.model_access import ModelDecisionRequired
+from highlightminer.storage import register_source
 from highlightminer.ui_common import (
     hydrate_persistent_widget,
     persist_widget_value,
@@ -79,8 +87,28 @@ def test_model_decision_keeps_persistent_job_identity(monkeypatch) -> None:
     assert pending["video_path"] == "vod.mp4"
 
 
-def test_cancel_pending_job_distinguishes_terminal_state(monkeypatch, tmp_path) -> None:
-    completed = {"status": "completed", "analysis_id": "analysis-123"}
+def _active_job(status: str = "queued") -> dict:
+    return {
+        "id": "job-123",
+        "source_id": "source-123",
+        "source_fingerprint": "fingerprint-123",
+        "status": status,
+        "stage": "queued",
+        "message": "Analysis queued",
+        "config": {
+            "video_path": "/vod.mp4",
+            "chat_path": None,
+            "content_label": "Test",
+            "analysis_title": "Snapshot title",
+            "work_dir": "/work",
+            "reuse_features": True,
+        },
+    }
+
+
+def test_cancel_pending_job_distinguishes_terminal_state(monkeypatch, tmp_path: Path) -> None:
+    completed = _active_job("completed")
+    completed["analysis_id"] = "analysis-123"
     monkeypatch.setattr(ui_mine, "cancel_analysis_job", lambda _db, _job: False)
     monkeypatch.setattr(ui_mine, "load_analysis_job", lambda _db, _job: completed)
 
@@ -127,6 +155,70 @@ def test_cancel_cleanup_removes_pending_and_queued_worker_state(monkeypatch) -> 
     assert ui_mine._ANALYSIS_RUNNING_KEY not in state
 
 
+def test_persistent_active_job_locks_controls_without_session_queue(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(ui_mine.st, "session_state", {})
+    monkeypatch.setattr(ui_mine, "find_active_analysis_job", lambda _db: _active_job("running"))
+
+    assert ui_mine.analysis_is_running(tmp_path / "highlightminer.db") is True
+
+
+def test_queued_job_is_restored_after_streamlit_state_cleanup(monkeypatch, tmp_path: Path) -> None:
+    state: dict[str, object] = {}
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    monkeypatch.setattr(ui_mine, "find_active_analysis_job", lambda _db: _active_job())
+
+    ui_mine._restore_persistent_analysis_state(tmp_path / "highlightminer.db")
+
+    queued = state[ui_mine._QUEUED_ANALYSIS_KEY]
+    assert queued["analysis_job_id"] == "job-123"
+    assert queued["analysis_title"] == "Snapshot title"
+    assert state[ui_mine._ANALYSIS_RUNNING_KEY] is True
+
+
+def test_rerun_does_not_launch_a_second_worker_for_running_job(monkeypatch, tmp_path: Path) -> None:
+    state = {
+        ui_mine._QUEUED_ANALYSIS_KEY: {"analysis_job_id": "job-123"},
+        ui_mine._ANALYSIS_RUNNING_KEY: True,
+    }
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    monkeypatch.setattr(ui_mine, "load_analysis_job", lambda _db, _job: _active_job("running"))
+    monkeypatch.setattr(
+        ui_mine,
+        "_run_analysis_ui",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("duplicate launch")),
+    )
+
+    ui_mine._run_queued_analysis(tmp_path / "highlightminer.db")
+
+    assert ui_mine._QUEUED_ANALYSIS_KEY not in state
+    assert ui_mine._ANALYSIS_RUNNING_KEY not in state
+
+
+def test_start_race_reports_existing_worker_instead_of_failure(monkeypatch, tmp_path: Path) -> None:
+    state = {
+        ui_mine._QUEUED_ANALYSIS_KEY: {"analysis_job_id": "job-123"},
+        ui_mine._ANALYSIS_RUNNING_KEY: True,
+    }
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    monkeypatch.setattr(ui_mine.st, "rerun", lambda: None)
+    monkeypatch.setattr(
+        ui_mine,
+        "_run_analysis_ui",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AnalysisJobStateError("another session started this job")
+        ),
+    )
+    observed_jobs = iter([_active_job("queued"), _active_job("running")])
+    monkeypatch.setattr(ui_mine, "load_analysis_job", lambda _db, _job: next(observed_jobs))
+
+    ui_mine._run_queued_analysis(tmp_path / "highlightminer.db")
+
+    assert state["analysis_notice"] == "Analysis is already running in another session."
+    assert "analysis_error" not in state
+    assert ui_mine._QUEUED_ANALYSIS_KEY not in state
+    assert ui_mine._ANALYSIS_RUNNING_KEY not in state
+
+
 def test_terminal_model_decision_race_does_not_leave_pending_prompt(monkeypatch, tmp_path) -> None:
     state = {
         ui_mine._QUEUED_ANALYSIS_KEY: {"video_path": "vod.mp4"},
@@ -156,3 +248,70 @@ def test_terminal_model_decision_race_does_not_leave_pending_prompt(monkeypatch,
     assert ui_mine._PENDING_MODEL_ANALYSIS_KEY not in state
     assert ui_mine._PENDING_RERUN_KEY not in state
     assert ui_mine._QUEUED_ANALYSIS_KEY not in state
+    assert ui_mine._ANALYSIS_RUNNING_KEY not in state
+
+
+def test_model_prompt_self_clears_when_job_already_completed(monkeypatch, tmp_path: Path) -> None:
+    state = {
+        ui_mine._PENDING_MODEL_ANALYSIS_KEY: {"analysis_job_id": "job-123"},
+        ui_mine._PENDING_RERUN_KEY: {"source": {"id": "source-123"}},
+    }
+    completed = _active_job("completed")
+    completed["analysis_id"] = "analysis-123"
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    monkeypatch.setattr(ui_mine.st, "rerun", lambda: None)
+    monkeypatch.setattr(ui_mine, "load_analysis_job", lambda _db, _job: completed)
+
+    assert ui_mine._render_model_decision(tmp_path / "highlightminer.db") is True
+
+    assert state["analysis_id"] == "analysis-123"
+    assert state["analysis_notice"] == "Analysis had already completed."
+    assert ui_mine._PENDING_MODEL_ANALYSIS_KEY not in state
+    assert ui_mine._PENDING_RERUN_KEY not in state
+
+
+def test_job_timer_uses_persisted_start_and_finish_times() -> None:
+    job = {
+        "created_at": "2026-08-26T10:00:00+00:00",
+        "started_at": "2026-08-26T10:00:05+00:00",
+        "finished_at": None,
+    }
+
+    assert ui_mine._job_elapsed_seconds(
+        job,
+        now=datetime(2026, 8, 26, 10, 1, 10, tzinfo=timezone.utc),
+    ) == 65.0
+    assert ui_mine._format_elapsed(65.0) == "00:01:05"
+
+
+def test_job_is_created_with_click_time_settings_snapshot(tmp_path: Path, monkeypatch) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"video")
+    db = tmp_path / "highlightminer.db"
+    source = register_source(
+        db,
+        {
+            "id": "ignored",
+            "fingerprint": "source-fingerprint",
+            "path": str(video),
+            "video_name": video.name,
+            "file_size": video.stat().st_size,
+        },
+    )
+    monkeypatch.setattr(ui_mine, "load_app_settings", lambda _db: Settings(beam_size=7))
+
+    job = ui_mine._create_queued_analysis_job(
+        db,
+        source=source,
+        video_path=str(video),
+        chat_path="",
+        content_label="Test",
+        analysis_title="  Immutable title  ",
+        work_dir=str(tmp_path / "work"),
+        reuse_features=True,
+    )
+
+    persisted = load_analysis_job(db, job["id"])
+    assert persisted["status"] == "queued"
+    assert persisted["config"]["settings"]["beam_size"] == 7
+    assert persisted["config"]["analysis_title"] == "Immutable title"

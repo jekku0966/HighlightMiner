@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
 
-from .analysis_jobs import AnalysisJobTerminalError, cancel_analysis_job, load_analysis_job
+from .analysis_jobs import (
+    AnalysisJobStateError,
+    AnalysisJobTerminalError,
+    cancel_analysis_job,
+    create_analysis_job,
+    find_active_analysis_job,
+    list_analysis_job_events,
+    load_analysis_job,
+)
 from .analysis_identity import load_analysis_identities, load_analysis_identity, save_analysis_title
 from .categorization import normalize_content_label
+from .config import Settings
 from .export import PreviewFileLockError, create_preview_clip, export_clip
 from .model_access import (
     ModelAccessPreferences,
@@ -18,9 +28,9 @@ from .model_access import (
     set_model_download_consent,
     validate_local_model_directory,
 )
-from .pipeline import analyze_vod
+from .pipeline import analyze_vod, snapshot_analysis_config
 from .review import load_review, save_review
-from .security import validate_local_video
+from .security import validate_chat_file, validate_local_video
 from .settings_presets import detect_weight_preset, normalize_weights
 from .settings_store import load_app_settings
 from .storage import find_source_runs, import_legacy_analysis, learning_summary, list_analyses, load_analysis, record_export
@@ -45,12 +55,82 @@ _PREVIEW_ACTIVE_KEY = "preview_active_candidate"
 _PREVIEW_CLOSED_KEY = "preview_closed"
 
 
-def analysis_is_running() -> bool:
-    """True while this Streamlit session owns a queued analysis run."""
-    return bool(
+def analysis_is_running(db_path: Path | None = None) -> bool:
+    """True while this session owns work or SQLite has a persistent active job."""
+    session_owned = bool(
         st.session_state.get(_ANALYSIS_RUNNING_KEY)
         and st.session_state.get(_QUEUED_ANALYSIS_KEY)
     )
+    if session_owned or db_path is None:
+        return session_owned
+    return find_active_analysis_job(db_path) is not None
+
+
+def _job_analysis_args(job: dict) -> dict:
+    config = dict(job.get("config") or {})
+    return {
+        "video_path": str(config["video_path"]),
+        "chat_path": str(config.get("chat_path") or ""),
+        "content_label": str(config.get("content_label") or ""),
+        "analysis_title": str(config.get("analysis_title") or ""),
+        "work_dir": str(config["work_dir"]),
+        "source_info": {
+            "id": str(job["source_id"]),
+            "fingerprint": str(job["source_fingerprint"]),
+        },
+        "reuse_features": bool(config.get("reuse_features", True)),
+        "analysis_job_id": str(job["id"]),
+    }
+
+
+def _restore_persistent_analysis_state(db_path: Path) -> dict | None:
+    active = find_active_analysis_job(db_path)
+    if active is None:
+        return None
+    if active["status"] == "queued" and not st.session_state.get(_QUEUED_ANALYSIS_KEY):
+        _queue_analysis(**_job_analysis_args(active))
+    elif active["status"] == "awaiting_input" and not st.session_state.get(_PENDING_MODEL_ANALYSIS_KEY):
+        st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = {
+            **_job_analysis_args(active),
+            "message": str(active.get("message") or "Choose how to continue this analysis."),
+        }
+    return active
+
+
+def _parse_job_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _job_elapsed_seconds(job: dict, *, now: datetime | None = None) -> float:
+    started = _parse_job_time(job.get("started_at") or job.get("created_at"))
+    if started is None:
+        return 0.0
+    finished = _parse_job_time(job.get("finished_at"))
+    endpoint = finished or now or datetime.now(timezone.utc)
+    return max(0.0, (endpoint - started).total_seconds())
+
+
+def _format_elapsed(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def _timings_caption(timings: dict) -> str:
+    if not timings:
+        return "Stage timings will appear as work completes."
+    values = []
+    for name, seconds in timings.items():
+        label = str(name).removesuffix("_seconds").replace("_", " ")
+        values.append(f"{label} {float(seconds):.1f}s")
+    return "Completed timings · " + " · ".join(values)
 
 
 def _queue_analysis(**analysis_args) -> None:
@@ -80,6 +160,35 @@ def _cancel_pending_analysis_job(db_path: Path, job_id: str | None) -> tuple[str
     except KeyError:
         return "missing", None
     return str(job["status"]), job
+
+
+def _create_queued_analysis_job(
+    db_path: Path,
+    *,
+    source: dict,
+    video_path: str,
+    chat_path: str,
+    content_label: str,
+    analysis_title: str,
+    work_dir: str,
+    reuse_features: bool,
+) -> dict:
+    video = validate_local_video(video_path)
+    chat = validate_chat_file(chat_path) if chat_path else None
+    work = Path(work_dir).expanduser().resolve()
+    settings = load_app_settings(db_path)
+    config = snapshot_analysis_config(
+        video=video,
+        work=work,
+        settings=settings,
+        chat_path=chat,
+        content_label=normalize_content_label(content_label),
+        source_fingerprint=str(source["fingerprint"]),
+        reuse_features=reuse_features,
+        transcription_requested=True,
+    )
+    config["analysis_title"] = str(analysis_title).strip()
+    return create_analysis_job(db_path, source, config)
 
 
 def _candidate_rows(analysis: dict, review: dict) -> list[dict]:
@@ -123,14 +232,27 @@ def _run_analysis_ui(
     skip_transcription: bool = False,
     analysis_job_id: str | None = None,
 ) -> str:
-    settings = load_app_settings(db_path)
+    if analysis_job_id:
+        job = load_analysis_job(db_path, analysis_job_id)
+        settings = Settings(**dict(job["config"]["settings"]))
+    else:
+        settings = load_app_settings(db_path)
     with st.status("Analyzing…", expanded=True) as status:
         label = st.empty()
+        metadata = st.empty()
+        timing_details = st.empty()
         bar = st.progress(0.0)
 
         def progress(message: str, value: float) -> None:
             label.write(message)
             bar.progress(min(1.0, max(0.0, value)))
+            if analysis_job_id:
+                current = load_analysis_job(db_path, analysis_job_id)
+                metadata.caption(
+                    f"Stage: **{str(current['stage']).replace('_', ' ')}** · "
+                    f"overall elapsed **{_format_elapsed(_job_elapsed_seconds(current))}**"
+                )
+                timing_details.caption(_timings_caption(current.get("timings") or {}))
 
         analysis_id = analyze_vod(
             video_path,
@@ -167,6 +289,38 @@ def _run_queued_analysis(db_path: Path) -> None:
         st.session_state.pop(_ANALYSIS_RUNNING_KEY, None)
         return
 
+    job_id = queued.get("analysis_job_id")
+    if job_id:
+        try:
+            job = load_analysis_job(db_path, str(job_id))
+        except KeyError as exc:
+            st.session_state["analysis_error"] = str(exc)
+            _clear_queued_analysis_state()
+            return
+        if job["status"] == "completed":
+            st.session_state.analysis_id = job["analysis_id"]
+            _clear_queued_analysis_state()
+            st.rerun()
+            return
+        if job["status"] == "awaiting_input":
+            st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = {
+                **_job_analysis_args(job),
+                "message": str(job.get("message") or "Choose how to continue this analysis."),
+            }
+            _clear_queued_analysis_state()
+            st.rerun()
+            return
+        if job["status"] == "running":
+            # A Streamlit rerun must not launch a second worker for the same job.
+            _clear_queued_analysis_state()
+            return
+        if job["status"] in {"failed", "cancelled", "interrupted"}:
+            st.session_state["analysis_error"] = str(
+                job.get("error_message") or job.get("message") or f"Analysis {job['status']}"
+            )
+            _clear_queued_analysis_state()
+            return
+
     try:
         st.session_state.analysis_id = _run_analysis_ui(db_path=db_path, **queued)
     except ModelDecisionRequired as exc:
@@ -185,6 +339,18 @@ def _run_queued_analysis(db_path: Path) -> None:
                 or job.get("message")
                 or f"Analysis {job['status']}."
             )
+    except AnalysisJobStateError as exc:
+        current_job = None
+        job_id = queued.get("analysis_job_id")
+        if job_id:
+            try:
+                current_job = load_analysis_job(db_path, str(job_id))
+            except KeyError:
+                pass
+        if current_job and current_job["status"] == "running":
+            st.session_state["analysis_notice"] = "Analysis is already running in another session."
+        else:
+            st.session_state["analysis_error"] = f"{type(exc).__name__}: {exc}"
     except Exception as exc:
         st.session_state["analysis_error"] = f"{type(exc).__name__}: {exc}"
     finally:
@@ -228,7 +394,40 @@ def _render_model_decision(db_path: Path) -> bool:
     if not pending:
         return False
 
-    settings = load_app_settings(db_path)
+    job_id = pending.get("analysis_job_id")
+    if job_id:
+        try:
+            job = load_analysis_job(db_path, str(job_id))
+        except KeyError:
+            _clear_pending_analysis_state()
+            _clear_queued_analysis_state()
+            st.session_state["analysis_notice"] = "The analysis job no longer exists."
+            st.rerun()
+            return True
+        if job["status"] in {"completed", "failed", "cancelled", "interrupted"}:
+            _clear_pending_analysis_state()
+            _clear_queued_analysis_state()
+            if job["status"] == "completed" and job.get("analysis_id"):
+                st.session_state["analysis_id"] = job["analysis_id"]
+                st.session_state["analysis_notice"] = "Analysis had already completed."
+            elif job["status"] == "failed":
+                st.session_state["analysis_error"] = str(
+                    job.get("error_message") or job.get("message") or "Analysis failed."
+                )
+            else:
+                st.session_state["analysis_notice"] = str(
+                    job.get("message") or f"Analysis {job['status']}."
+                )
+            st.rerun()
+            return True
+        if job["status"] == "running":
+            _clear_pending_analysis_state()
+            st.session_state["analysis_notice"] = "Analysis is already running in another session."
+            st.rerun()
+            return True
+        settings = Settings(**dict(job["config"]["settings"]))
+    else:
+        settings = load_app_settings(db_path)
     with st.container(border=True):
         st.subheader("Speech-recognition model required")
         st.write(pending.get("message") or f"The model {settings.whisper_model!r} is not installed.")
@@ -291,24 +490,75 @@ def _render_model_decision(db_path: Path) -> bool:
     return True
 
 
-def _render_source_sidebar(db_path: Path) -> tuple[str, str, str, str, str]:
+def _render_analysis_job_status(db_path: Path, job: dict) -> None:
+    status_label = str(job["status"]).replace("_", " ").title()
+    stage_label = str(job["stage"]).replace("_", " ").title()
+    with st.container(border=True):
+        st.subheader(f"⏱️ Analysis job · {status_label}")
+        st.progress(float(job.get("progress", 0.0)))
+        st.write(str(job.get("message") or stage_label))
+        st.caption(
+            f"Stage: **{stage_label}** · overall elapsed "
+            f"**{_format_elapsed(_job_elapsed_seconds(job))}** · job `{str(job['id'])[:12]}`"
+        )
+        st.caption(_timings_caption(job.get("timings") or {}))
+
+        notable = [
+            event
+            for event in list_analysis_job_events(db_path, str(job["id"]))
+            if event["level"] in {"warning", "error"}
+        ]
+        if notable:
+            with st.expander("Warnings and recovery events"):
+                for event in notable[-8:]:
+                    st.write(f"**{event['event']}** · {event['message']}")
+        if job["status"] == "running":
+            st.caption(
+                "Controls stay locked while the worker is active. A Stop button is not shown because "
+                "the current processing stages cannot yet be cancelled safely."
+            )
+            if st.button("Refresh analysis status", key=f"refresh_analysis_job_{job['id']}"):
+                st.rerun()
+
+
+def _render_source_sidebar(db_path: Path, *, disabled: bool = False) -> tuple[str, str, str, str, str]:
     st.header("🎬 Source")
     st.caption("Choose local files directly. The VOD is read in place and never uploaded.")
-    video_path = path_picker("VOD", "video_path_input", placeholder=r"D:\VODs\stream.mp4", file_filter=_VIDEO_FILTER)
-    chat_path = path_picker("Chat file (optional)", "chat_path_input", placeholder="TwitchDownloader JSON / JSONL / CSV", file_filter=_CHAT_FILTER)
+    video_path = path_picker(
+        "VOD",
+        "video_path_input",
+        placeholder=r"D:\VODs\stream.mp4",
+        file_filter=_VIDEO_FILTER,
+        disabled=disabled,
+    )
+    chat_path = path_picker(
+        "Chat file (optional)",
+        "chat_path_input",
+        placeholder="TwitchDownloader JSON / JSONL / CSV",
+        file_filter=_CHAT_FILTER,
+        disabled=disabled,
+    )
     content_label = persistent_text_input(
         "Content / Game",
         "content_label_input",
         placeholder="Just Chatting / Overwatch 2 / ...",
         help="Stored with every candidate for future preference learning.",
+        disabled=disabled,
     )
     analysis_title = persistent_text_input(
         "Analysis title (optional)",
         "analysis_title_input",
         placeholder="Boss fight test / chat experiment / ...",
         help="Optional note for this run. The weighting profile is shown separately as the analysis name.",
+        disabled=disabled,
     )
-    work_dir = path_picker("Work folder", "work_dir_input", default=default_work_dir(), folder=True)
+    work_dir = path_picker(
+        "Work folder",
+        "work_dir_input",
+        default=default_work_dir(),
+        folder=True,
+        disabled=disabled,
+    )
 
     settings = load_app_settings(db_path)
     effective = normalize_weights(settings.weights)
@@ -330,7 +580,15 @@ def _render_analysis_controls(
     content_label: str,
     analysis_title: str,
     work_dir: str,
+    *,
+    active_job: dict | None = None,
 ) -> None:
+    if active_job is not None:
+        _render_analysis_job_status(db_path, active_job)
+        if active_job["status"] == "awaiting_input":
+            _render_model_decision(db_path)
+        return
+
     if _render_model_decision(db_path):
         return
 
@@ -345,15 +603,17 @@ def _render_analysis_controls(
                     "video_path": str(Path(video_path).expanduser().resolve()),
                 }
                 st.rerun()
-            _queue_analysis(
+            job = _create_queued_analysis_job(
+                db_path,
+                source=source,
                 video_path=video_path,
                 chat_path=chat_path,
                 content_label=content_label,
                 analysis_title=analysis_title,
                 work_dir=work_dir,
-                source_info=source,
                 reuse_features=True,
             )
+            _queue_analysis(**_job_analysis_args(job))
             st.rerun()
         except Exception as exc:
             st.exception(exc)
@@ -380,20 +640,25 @@ def _render_analysis_controls(
         st.session_state.pop(_PENDING_RERUN_KEY, None)
         st.rerun()
     if r2.button("Analyze again", type="primary", width="stretch"):
-        _queue_analysis(
-            video_path=video_path,
-            chat_path=chat_path,
-            content_label=content_label,
-            analysis_title=analysis_title,
-            work_dir=work_dir,
-            source_info=pending.get("source"),
-            reuse_features=not force_fresh,
-        )
-        st.session_state.pop(_PENDING_RERUN_KEY, None)
-        st.rerun()
+        try:
+            job = _create_queued_analysis_job(
+                db_path,
+                source=pending.get("source"),
+                video_path=video_path,
+                chat_path=chat_path,
+                content_label=content_label,
+                analysis_title=analysis_title,
+                work_dir=work_dir,
+                reuse_features=not force_fresh,
+            )
+            _queue_analysis(**_job_analysis_args(job))
+            st.session_state.pop(_PENDING_RERUN_KEY, None)
+            st.rerun()
+        except Exception as exc:
+            st.exception(exc)
 
 
-def _render_history_sidebar(db_path: Path) -> None:
+def _render_history_sidebar(db_path: Path, *, disabled: bool = False) -> None:
     st.divider()
     st.subheader("🗃️ Analysis history")
     history = list_analyses(db_path, limit=50)
@@ -403,17 +668,23 @@ def _render_history_sidebar(db_path: Path) -> None:
         ids = [row["id"] for row in history]
         current_id = st.session_state.get("analysis_id")
         default_index = ids.index(current_id) if current_id in ids else 0
-        selected = st.selectbox("Recent analyses", labels, index=default_index)
+        selected = st.selectbox("Recent analyses", labels, index=default_index, disabled=disabled)
         selected_id = ids[labels.index(selected)]
-        if st.button("Load selected analysis", width="stretch"):
+        if st.button("Load selected analysis", width="stretch", disabled=disabled):
             st.session_state.analysis_id = selected_id
             st.rerun()
     else:
         st.caption("No SQLite analyses yet.")
 
     with st.expander("Import v0.1 analysis.json"):
-        legacy_path = path_picker("Legacy analysis.json", "legacy_analysis_input", placeholder=r"D:\HighlightMiner\highlightminer_work\stream\analysis.json", file_filter=_JSON_FILTER)
-        if st.button("Import into database", disabled=not legacy_path, width="stretch"):
+        legacy_path = path_picker(
+            "Legacy analysis.json",
+            "legacy_analysis_input",
+            placeholder=r"D:\HighlightMiner\highlightminer_work\stream\analysis.json",
+            file_filter=_JSON_FILTER,
+            disabled=disabled,
+        )
+        if st.button("Import into database", disabled=disabled or not legacy_path, width="stretch"):
             try:
                 st.session_state.analysis_id = import_legacy_analysis(legacy_path, db_path)
                 st.session_state["analysis_notice"] = "Legacy analysis imported into SQLite."
@@ -576,12 +847,26 @@ def _render_review(db_path: Path) -> None:
 
 
 def render_mine_page(db_path: Path) -> None:
+    _restore_persistent_analysis_state(db_path)
     _run_queued_analysis(db_path)
+    active_job = find_active_analysis_job(db_path)
+    controls_locked = active_job is not None
 
     with st.sidebar:
-        video_path, chat_path, content_label, analysis_title, work_dir = _render_source_sidebar(db_path)
-        _render_analysis_controls(db_path, video_path, chat_path, content_label, analysis_title, work_dir)
-        _render_history_sidebar(db_path)
+        video_path, chat_path, content_label, analysis_title, work_dir = _render_source_sidebar(
+            db_path,
+            disabled=controls_locked,
+        )
+        _render_analysis_controls(
+            db_path,
+            video_path,
+            chat_path,
+            content_label,
+            analysis_title,
+            work_dir,
+            active_job=active_job,
+        )
+        _render_history_sidebar(db_path, disabled=controls_locked)
         st.caption(f"Database: `{db_path}`")
         render_shutdown()
 
