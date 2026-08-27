@@ -49,6 +49,15 @@ def test_load_latest_skips_newer_incompatible_analysis_formats() -> None:
     assert ui_mine._latest_compatible_run([runs[0]]) is None
 
 
+def test_analysis_deletion_requires_the_full_exact_id() -> None:
+    analysis_id = "analysis-123"
+
+    assert ui_mine._analysis_delete_confirmation_matches(analysis_id, analysis_id) is True
+    assert ui_mine._analysis_delete_confirmation_matches(analysis_id, " analysis-123 ") is True
+    assert ui_mine._analysis_delete_confirmation_matches(analysis_id, "analysis") is False
+    assert ui_mine._analysis_delete_confirmation_matches(analysis_id, "") is False
+
+
 def test_settings_editor_reseeds_when_streamlit_removed_a_widget_key() -> None:
     state = {
         key: "present"

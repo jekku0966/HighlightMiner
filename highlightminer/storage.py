@@ -14,7 +14,7 @@ from .runtime import app_root
 from .security import validate_legacy_analysis_file, validate_local_video
 from .util import load_json
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 FEATURE_SCHEMA_VERSION = 2
 ALGORITHM_VERSION = "heuristic-v1"
 DATABASE_FILENAME = "highlightminer.db"
@@ -46,10 +46,12 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
-def _ensure_column(conn: sqlite3.Connection, table: str, definition: str) -> None:
+def _ensure_column(conn: sqlite3.Connection, table: str, definition: str) -> bool:
     name = definition.split()[0]
     if name not in _columns(conn, table):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+        return True
+    return False
 
 
 def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
@@ -77,6 +79,7 @@ def initialize(conn: sqlite3.Connection) -> None:
             current_path TEXT NOT NULL,
             video_name TEXT NOT NULL,
             file_size INTEGER NOT NULL,
+            last_run_number INTEGER NOT NULL DEFAULT 0,
             first_seen_at TEXT NOT NULL,
             last_seen_at TEXT NOT NULL
         );
@@ -282,7 +285,24 @@ def initialize(conn: sqlite3.Connection) -> None:
         "cache_json TEXT NOT NULL DEFAULT '{}'",
     ):
         _ensure_column(conn, "analyses", definition)
+    source_counter_added = _ensure_column(
+        conn,
+        "sources",
+        "last_run_number INTEGER NOT NULL DEFAULT 0",
+    )
     _ensure_column(conn, "candidates", "features_json TEXT NOT NULL DEFAULT '{}'")
+    if source_counter_added:
+        conn.execute(
+            """
+            UPDATE sources
+            SET last_run_number = MAX(
+                last_run_number,
+                COALESCE((
+                    SELECT MAX(a.run_number) FROM analyses a WHERE a.source_id = sources.id
+                ), 0)
+            )
+            """
+        )
 
     conn.executescript(
         """
@@ -396,6 +416,15 @@ def register_source(db_path: str | Path | None, source: dict[str, Any]) -> dict[
                 """,
                 (source_id, fingerprint, next_run, legacy["id"]),
             )
+
+        conn.execute(
+            """
+            UPDATE sources
+            SET last_run_number = MAX(last_run_number, ?)
+            WHERE id = ?
+            """,
+            (next_run, source_id),
+        )
 
         conn.execute(
             """
@@ -598,9 +627,19 @@ def save_analysis(
 
     connection_scope = connect(db_path) if owns_connection else nullcontext(connection)
     with connection_scope as conn:
+        cursor = conn.execute(
+            """
+            UPDATE sources
+            SET last_run_number = last_run_number + 1
+            WHERE id = ?
+            """,
+            (source_row["id"],),
+        )
+        if not cursor.rowcount:
+            raise KeyError(f"Source not found: {source_row['id']}")
         run_number = int(
             conn.execute(
-                "SELECT COALESCE(MAX(run_number), 0) + 1 FROM analyses WHERE source_id = ?",
+                "SELECT last_run_number FROM sources WHERE id = ?",
                 (source_row["id"],),
             ).fetchone()[0]
         )
@@ -804,7 +843,7 @@ def list_analyses(db_path: str | Path | None, limit: int = 100) -> list[dict]:
             LEFT JOIN reviews r
                 ON r.analysis_id = c.analysis_id AND r.candidate_id = c.candidate_id
             GROUP BY a.id
-            ORDER BY a.created_at DESC
+            ORDER BY a.created_at DESC, a.rowid DESC
             LIMIT ?
             """,
             (max(1, min(int(limit), 1000)),),
