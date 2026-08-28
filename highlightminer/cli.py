@@ -256,15 +256,16 @@ def cmd_ui(args: argparse.Namespace | None = None) -> int:
         if process.poll() is None:
             _stop_ui_process(process)
         shutdown_file.unlink(missing_ok=True)
-        try:
-            clear_shutdown_admission(db_path)
-        except Exception as exc:
-            print(
-                "Warning: could not clear the shutdown admission marker "
-                f"({type(exc).__name__}: {exc}).",
-                file=sys.stderr,
-                flush=True,
-            )
+        if process.poll() is not None:
+            try:
+                clear_shutdown_admission(db_path)
+            except Exception as exc:
+                print(
+                    "Warning: could not clear the shutdown admission marker "
+                    f"({type(exc).__name__}: {exc}).",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     return_code = process.wait()
     if shutdown_requested or desktop_closed_normally:
