@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .shutdown import ensure_work_admitted
 from .storage import connect, utc_now
 
 ACTIVE_ANALYSIS_JOB_STATUSES = ("queued", "running", "awaiting_input")
@@ -163,6 +164,8 @@ def create_analysis_job(
     now = utc_now()
     try:
         with connect(db_path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            ensure_work_admitted(conn)
             persisted_source = conn.execute(
                 "SELECT fingerprint FROM sources WHERE id = ?",
                 (str(source["id"]),),
@@ -203,6 +206,8 @@ def create_analysis_job(
 def start_analysis_job(db_path: str | Path | None, job_id: str) -> dict[str, Any]:
     now = utc_now()
     with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        ensure_work_admitted(conn)
         updated = conn.execute(
             """
             UPDATE analysis_jobs

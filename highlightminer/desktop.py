@@ -10,31 +10,10 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Callable
 
-from .analysis_jobs import find_active_analysis_job
-from .export_queue import load_active_export_batch
-
 UI_HOST = "127.0.0.1"
 UI_PORT = 8501
 UI_URL = f"http://{UI_HOST}:{UI_PORT}"
 _VALID_UI_MODES = {"desktop", "browser", "server"}
-
-
-def active_work_shutdown_block_reason(db_path: str | Path) -> str | None:
-    """Explain why stopping the shared UI process would interrupt live work."""
-    analysis_job = find_active_analysis_job(db_path)
-    if analysis_job is not None and analysis_job["status"] != "awaiting_input":
-        return (
-            "Analysis is still starting or running. HighlightMiner cannot safely cancel "
-            "this stage, so wait for it to finish or reach the model choice before exiting."
-        )
-
-    if load_active_export_batch(db_path) is not None:
-        return (
-            "An export batch is still running. HighlightMiner cannot safely cancel FFmpeg "
-            "mid-export, so wait for the batch to finish before exiting."
-        )
-
-    return None
 
 
 def resolve_ui_mode(*, browser_requested: bool = False, platform_name: str | None = None) -> str:

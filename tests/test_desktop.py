@@ -6,12 +6,9 @@ import types
 
 import pytest
 
+import highlightminer.cli as cli
 import highlightminer.desktop as desktop
-from highlightminer.desktop import (
-    active_work_shutdown_block_reason,
-    resolve_ui_mode,
-    wait_for_server,
-)
+from highlightminer.desktop import resolve_ui_mode, wait_for_server
 
 
 def test_windows_defaults_to_desktop(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -50,30 +47,38 @@ def test_wait_for_server_fails_fast_if_child_exits() -> None:
         wait_for_server(DeadProcess(), timeout=1.0)
 
 
-def test_shutdown_block_reason_only_reports_work_that_cannot_be_safely_stopped(
+def test_browser_monitor_rechecks_shutdown_after_active_work_finishes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    db = tmp_path / "highlightminer.db"
-    monkeypatch.setattr(
-        desktop,
-        "find_active_analysis_job",
-        lambda _db: {"status": "running"},
-    )
-    monkeypatch.setattr(desktop, "load_active_export_batch", lambda _db: None)
+    shutdown_file = tmp_path / "shutdown.flag"
+    shutdown_file.touch()
+    blocker_results = iter(["Analysis is running.", None])
 
-    assert "Analysis is still" in active_work_shutdown_block_reason(db)
+    class Process:
+        return_code: int | None = None
 
-    monkeypatch.setattr(
-        desktop,
-        "find_active_analysis_job",
-        lambda _db: {"status": "awaiting_input"},
-    )
-    assert active_work_shutdown_block_reason(db) is None
+        def poll(self) -> int | None:
+            return self.return_code
 
-    monkeypatch.setattr(desktop, "find_active_analysis_job", lambda _db: None)
-    monkeypatch.setattr(desktop, "load_active_export_batch", lambda _db: {"status": "running"})
-    assert "export batch" in active_work_shutdown_block_reason(db)
+    process = Process()
+
+    def stop_ui(target) -> None:
+        target.return_code = 0
+
+    def simulate_retry(_seconds: float) -> None:
+        if not shutdown_file.exists():
+            shutdown_file.touch()
+
+    monkeypatch.setattr(cli, "_stop_ui_process", stop_ui)
+    monkeypatch.setattr(cli.time, "sleep", simulate_retry)
+
+    assert cli._monitor_ui_process(
+        process,
+        shutdown_file,
+        shutdown_blocker=lambda: next(blocker_results),
+    ) is True
+    assert process.return_code == 0
 
 
 def test_desktop_close_stops_backend_before_destroy(

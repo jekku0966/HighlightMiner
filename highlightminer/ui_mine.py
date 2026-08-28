@@ -18,7 +18,6 @@ from .analysis_history import AnalysisDeletionBlocked, analysis_deletion_impact,
 from .analysis_identity import load_analysis_identities, load_analysis_identity, save_analysis_title
 from .categorization import normalize_content_label
 from .config import Settings
-from .desktop import active_work_shutdown_block_reason
 from .export import PreviewFileLockError, create_preview_clip, export_clip
 from .export_queue import (
     ExportBatchAlreadyRunning,
@@ -54,6 +53,7 @@ from .security import validate_chat_file, validate_local_video
 from .settings_presets import detect_weight_preset, normalize_weights
 from .settings_store import load_app_settings
 from .storage import find_source_runs, import_legacy_analysis, learning_summary, list_analyses, load_analysis
+from .shutdown import active_work_shutdown_block_reason
 from .transcription_status import is_transcription_skipped
 from .ui_common import (
     _CHAT_FILTER,
