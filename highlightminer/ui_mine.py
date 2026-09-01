@@ -1007,16 +1007,18 @@ def _render_review(db_path: Path) -> None:
     selected_label = st.selectbox("Review candidate", labels)
     candidate = candidates[labels.index(selected_label)]
     item = review["items"][candidate["id"]]
+    original_start = float(item["start"])
+    original_end = float(item["end"])
 
     preview_token = f"{analysis_id}:{candidate['id']}"
+    preview_bounds_key = f"preview_bounds_{analysis_id}_{candidate['id']}"
     candidate_changed = st.session_state.get(_PREVIEW_ACTIVE_KEY) != preview_token
     if candidate_changed:
         st.session_state[_PREVIEW_ACTIVE_KEY] = preview_token
         st.session_state[_PREVIEW_CLOSED_KEY] = False
+        st.session_state[preview_bounds_key] = (original_start, original_end)
 
     st.subheader(f"🎞️ {candidate['id']} — {candidate['reason']}", anchor=False)
-    original_start = float(item["start"])
-    original_end = float(item["end"])
     with st.form(f"clip_timing_form_{analysis_id}_{candidate['id']}"):
         left, right = st.columns(2)
         with left:
@@ -1045,20 +1047,29 @@ def _render_review(db_path: Path) -> None:
         )
     except ValueError as exc:
         timing_valid = False
-        start = original_start
-        preview_end = original_end
+        edited_start = original_start
+        edited_end = original_end
         st.error(str(exc))
+        st.caption("Preview was not updated; it remains at the last valid range.")
     else:
         timing_valid = True
-        start = edited_bounds.start
-        preview_end = edited_bounds.end
+        edited_start = edited_bounds.start
+        edited_end = edited_bounds.end
 
     if update_preview and timing_valid:
         st.session_state[_PREVIEW_CLOSED_KEY] = False
+        st.session_state[preview_bounds_key] = (edited_start, edited_end)
+
+    preview_start, preview_end = st.session_state.get(
+        preview_bounds_key,
+        (original_start, original_end),
+    )
+    preview_start = float(preview_start)
+    preview_end = float(preview_end)
 
     preview_dir = Path(analysis["work_dir"]) / ".previews" / analysis_id
     preview_slot = st.empty()
-    if candidate_changed or update_preview:
+    if candidate_changed or (update_preview and timing_valid):
         preview_slot.empty()
 
     preview_closed = bool(st.session_state.get(_PREVIEW_CLOSED_KEY, False))
@@ -1071,9 +1082,18 @@ def _render_review(db_path: Path) -> None:
         else:
             try:
                 with st.spinner("Preparing lightweight preview…"):
-                    preview = create_preview_clip(source_video, preview_dir, candidate["id"], float(start), preview_end)
+                    preview = create_preview_clip(
+                        source_video,
+                        preview_dir,
+                        candidate["id"],
+                        preview_start,
+                        preview_end,
+                    )
                 preview_slot.video(str(preview.path), width=640)
-                st.caption(f"Local preview only: {format_time(float(start))} → {format_time(preview_end)}. The full source VOD is never sent to the UI player.")
+                st.caption(
+                    f"Local preview only: {format_time(preview_start)} → {format_time(preview_end)}. "
+                    "The full source VOD is never sent to the UI player."
+                )
                 if preview.cleanup_failures:
                     st.warning(
                         "Preview ready, but Windows is still holding "
@@ -1106,13 +1126,13 @@ def _render_review(db_path: Path) -> None:
 
     b1, b2, b3, b4 = st.columns(4)
     if b1.button("✅ Keep", width="stretch", disabled=not timing_valid):
-        item.update(status="keep", start=start, end=preview_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
+        item.update(status="keep", start=edited_start, end=edited_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
     if b2.button("❌ Reject", width="stretch", disabled=not timing_valid):
-        item.update(status="reject", start=start, end=preview_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
+        item.update(status="reject", start=edited_start, end=edited_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
     if b3.button("↩ Unreview", width="stretch", disabled=not timing_valid):
-        item.update(status="unreviewed", start=start, end=preview_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
+        item.update(status="unreviewed", start=edited_start, end=edited_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
     if b4.button("💾 Save timing", width="stretch", disabled=not timing_valid):
-        item.update(start=start, end=preview_end, title=title); save_review(db_path, analysis_id, review); st.success("Saved")
+        item.update(start=edited_start, end=edited_end, title=title); save_review(db_path, analysis_id, review); st.success("Saved")
 
     st.divider()
     st.subheader("📦 Add to export queue", anchor=False)
