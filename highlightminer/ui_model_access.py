@@ -61,7 +61,7 @@ def render_model_access_settings(db_path: Path) -> None:
     cache_root = huggingface_cache_directory()
     _sync_editor_with_persisted(preferences)
 
-    st.subheader("Model access")
+    st.subheader("Model access", anchor=False)
     st.caption(
         "Download permission and local-model selection are local security controls. "
         "Save them here separately from the analysis settings below."

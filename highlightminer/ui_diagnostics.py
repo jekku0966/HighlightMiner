@@ -20,7 +20,7 @@ _DETAILED_KEY = "diagnostics_detailed_next_run"
 
 
 def render_diagnostics_settings(db_path: Path) -> None:
-    st.subheader("Diagnostic logging")
+    st.subheader("Diagnostic logging", anchor=False)
     st.caption(
         "Logs stay local on this device and are never uploaded automatically. "
         "Standard logging is intentionally lightweight and always enabled."

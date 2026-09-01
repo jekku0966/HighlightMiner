@@ -476,7 +476,7 @@ def _render_model_decision(db_path: Path) -> bool:
     else:
         settings = load_app_settings(db_path)
     with st.container(border=True):
-        st.subheader("Speech-recognition model required")
+        st.subheader("Speech-recognition model required", anchor=False)
         st.write(pending.get("message") or f"The model {settings.whisper_model!r} is not installed.")
         st.caption(
             "Your VOD stays local. Downloading only retrieves the speech-recognition model from Hugging Face. "
@@ -562,7 +562,7 @@ def _render_analysis_job_status(db_path: Path, job: dict) -> None:
     status_label = str(job["status"]).replace("_", " ").title()
     stage_label = str(job["stage"]).replace("_", " ").title()
     with st.container(border=True):
-        st.subheader(f"⏱️ Analysis job · {status_label}")
+        st.subheader(f"⏱️ Analysis job · {status_label}", anchor=False)
         st.progress(float(job.get("progress", 0.0)))
         st.write(str(job.get("message") or stage_label))
         st.caption(
@@ -590,7 +590,7 @@ def _render_analysis_job_status(db_path: Path, job: dict) -> None:
 
 
 def _render_source_sidebar(db_path: Path, *, disabled: bool = False) -> tuple[str, str, str, str, str]:
-    st.header("🎬 Source")
+    st.header("🎬 Source", anchor=False)
     st.caption("Choose local files directly. The VOD is read in place and never uploaded.")
     video_path = path_picker(
         "VOD",
@@ -760,7 +760,7 @@ def _render_analysis_controls(
 
 def _render_history_sidebar(db_path: Path, *, disabled: bool = False) -> None:
     st.divider()
-    st.subheader("🗃️ Analysis history")
+    st.subheader("🗃️ Analysis history", anchor=False)
     history = list_analyses(db_path, limit=50)
     if history:
         identities = load_analysis_identities(db_path, [row["id"] for row in history])
@@ -902,7 +902,7 @@ def _render_review(db_path: Path) -> None:
     content_label = normalize_content_label(analysis.get("content_label"))
     transcription = analysis.get("transcription", {})
     transcription_skipped = is_transcription_skipped(transcription)
-    st.subheader("📊 Analysis overview")
+    st.subheader("📊 Analysis overview", anchor=False)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Candidates", len(candidates))
     c2.metric("Kept", sum(x.get("status") == "keep" for x in review["items"].values()))
@@ -922,7 +922,7 @@ def _render_review(db_path: Path) -> None:
         st.warning("No candidates cleared the current threshold. Adjust Settings and analyze again.")
         return
 
-    st.subheader("⛏️ Ranked candidates")
+    st.subheader("⛏️ Ranked candidates", anchor=False)
     st.dataframe(_candidate_rows(analysis, review), width="stretch", hide_index=True)
     if load_active_export_batch(db_path) is not None:
         st.info(
@@ -940,7 +940,7 @@ def _render_review(db_path: Path) -> None:
         st.session_state[_PREVIEW_ACTIVE_KEY] = preview_token
         st.session_state[_PREVIEW_CLOSED_KEY] = False
 
-    st.subheader(f"🎞️ {candidate['id']} — {candidate['reason']}")
+    st.subheader(f"🎞️ {candidate['id']} — {candidate['reason']}", anchor=False)
     with st.form(f"clip_timing_form_{analysis_id}_{candidate['id']}"):
         left, right = st.columns(2)
         with left:
@@ -1012,7 +1012,7 @@ def _render_review(db_path: Path) -> None:
         item.update(start=start, end=preview_end, title=title); save_review(db_path, analysis_id, review); st.success("Saved")
 
     st.divider()
-    st.subheader("📦 Add to export queue")
+    st.subheader("📦 Add to export queue", anchor=False)
     export_running = load_active_export_batch(db_path) is not None
     export_dir = path_picker(
         "Export folder",
@@ -1110,7 +1110,7 @@ def _execute_export_queue(db_path: Path) -> None:
 
 def _render_export_queue(db_path: Path) -> None:
     st.divider()
-    st.subheader("📦 Export queue")
+    st.subheader("📦 Export queue", anchor=False)
     active = load_active_export_batch(db_path)
     items = list_export_queue(db_path)
     if not items:

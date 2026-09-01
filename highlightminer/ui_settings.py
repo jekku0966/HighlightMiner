@@ -159,7 +159,7 @@ def render_settings_page(db_path: Path) -> None:
     else:
         _seed_editor(settings)
 
-    st.header("⚙️ Settings")
+    st.header("⚙️ Settings", anchor=False)
     st.caption(
         "Analysis settings are stored in highlightminer.db and apply to future analyses and reruns. "
         "Existing runs keep their original snapshot; Model Access is saved separately as database-local security state."
@@ -265,7 +265,7 @@ def render_settings_page(db_path: Path) -> None:
         st.text_area("Reaction phrases", height=420, key=_EDITOR_KEYS["reactions"])
 
     with transfer:
-        st.subheader("Import")
+        st.subheader("Import", anchor=False)
         import_path = path_picker("Settings JSON", "settings_import_path", file_filter=_JSON_FILTER)
         if st.button("Import settings", disabled=not import_path):
             try:
@@ -275,7 +275,7 @@ def render_settings_page(db_path: Path) -> None:
             except Exception as exc:
                 st.exception(exc)
 
-        st.subheader("Export")
+        st.subheader("Export", anchor=False)
         if "settings_export_path" not in st.session_state:
             st.session_state["settings_export_path"] = str(app_root() / "HighlightMiner-settings.json")
         e1, e2 = st.columns([4, 1], vertical_alignment="bottom")

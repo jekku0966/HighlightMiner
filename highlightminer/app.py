@@ -37,7 +37,7 @@ def _render_app() -> None:
     running = analysis_is_running(db_path)
 
     with st.container(border=True):
-        st.title("⛏️ HighlightMiner")
+        st.title("⛏️ HighlightMiner", anchor=False)
         st.caption(
             "Mine long VODs for the moments worth keeping — audio + optional local speech recognition + optional chat, "
             "ranked locally on your machine. v0.2 keeps source-aware history, reviews, and app settings in SQLite."
@@ -47,7 +47,7 @@ def _render_app() -> None:
         st.session_state[_NAV_KEY] = _NAV_ITEMS[0]
 
     with st.sidebar:
-        st.header("HighlightMiner")
+        st.header("HighlightMiner", anchor=False)
         page = st.radio(
             "Navigate",
             _NAV_ITEMS,
