@@ -41,6 +41,17 @@ from .transcription_status import transcription_status
 
 _STREAMLIT_CHILD_ARG = "__streamlit_child__"
 _DESKTOP_PROBE_ARG = "__desktop_probe__"
+_STREAMLIT_FLAG_OPTIONS = {
+    "global_developmentMode": False,
+    "server_headless": True,
+    "server_address": "127.0.0.1",
+    "server_port": 8501,
+    "server_showEmailPrompt": False,
+    "browser_serverAddress": "127.0.0.1",
+    "browser_serverPort": 8501,
+    "browser_gatherUsageStats": False,
+    "client_toolbarMode": "minimal",
+}
 
 
 def _progress(message: str, value: float) -> None:
@@ -100,16 +111,7 @@ def _run_streamlit_child(app_path: str) -> int:
 
     main_script_path = os.path.abspath(path)
     streamlit_config._main_script_path = main_script_path
-    flag_options = {
-        "global_developmentMode": False,
-        "server_headless": True,
-        "server_address": "127.0.0.1",
-        "server_port": 8501,
-        "server_showEmailPrompt": False,
-        "browser_serverAddress": "127.0.0.1",
-        "browser_serverPort": 8501,
-        "browser_gatherUsageStats": False,
-    }
+    flag_options = dict(_STREAMLIT_FLAG_OPTIONS)
     bootstrap.load_config_options(flag_options=flag_options)
     check_credentials()
     print(f"Starting embedded Streamlit server for {main_script_path}", flush=True)

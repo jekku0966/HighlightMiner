@@ -19,3 +19,6 @@ textColor = "#EEF2F6"
 linkColor = "#F2B84B"
 borderColor = "#303A46"
 showWidgetBorder = true
+
+[client]
+toolbarMode = "minimal"
