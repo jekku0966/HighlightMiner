@@ -72,6 +72,7 @@ _PENDING_MODEL_ANALYSIS_KEY = "pending_model_analysis"
 _PENDING_RERUN_KEY = "pending_rerun"
 _QUEUED_ANALYSIS_KEY = "queued_analysis"
 _ANALYSIS_RUNNING_KEY = "analysis_running"
+_MODEL_DECISION_RESUME_KEY = "_resume_model_decision"
 _PREVIEW_ACTIVE_KEY = "preview_active_candidate"
 _PREVIEW_CLOSED_KEY = "preview_closed"
 _PENDING_DELETE_ANALYSIS_KEY = "pending_delete_analysis_id"
@@ -110,9 +111,18 @@ def _restore_persistent_analysis_state(db_path: Path) -> dict | None:
     active = find_active_analysis_job(db_path)
     if active is None:
         return None
+    queued = st.session_state.get(_QUEUED_ANALYSIS_KEY) or {}
+    matching_model_resume = bool(
+        queued.get(_MODEL_DECISION_RESUME_KEY)
+        and str(queued.get("analysis_job_id")) == str(active["id"])
+    )
     if active["status"] == "queued" and not st.session_state.get(_QUEUED_ANALYSIS_KEY):
         _queue_analysis(**_job_analysis_args(active))
-    elif active["status"] == "awaiting_input" and not st.session_state.get(_PENDING_MODEL_ANALYSIS_KEY):
+    elif (
+        active["status"] == "awaiting_input"
+        and not st.session_state.get(_PENDING_MODEL_ANALYSIS_KEY)
+        and not matching_model_resume
+    ):
         st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = {
             **_job_analysis_args(active),
             "message": str(active.get("message") or "Choose how to continue this analysis."),
@@ -320,6 +330,7 @@ def _run_queued_analysis(db_path: Path) -> None:
     if not queued:
         st.session_state.pop(_ANALYSIS_RUNNING_KEY, None)
         return
+    resume_model_decision = bool(queued.pop(_MODEL_DECISION_RESUME_KEY, False))
 
     job_id = queued.get("analysis_job_id")
     if job_id:
@@ -334,7 +345,7 @@ def _run_queued_analysis(db_path: Path) -> None:
             _clear_queued_analysis_state()
             st.rerun()
             return
-        if job["status"] == "awaiting_input":
+        if job["status"] == "awaiting_input" and not resume_model_decision:
             st.session_state[_PENDING_MODEL_ANALYSIS_KEY] = {
                 **_job_analysis_args(job),
                 "message": str(job.get("message") or "Choose how to continue this analysis."),
@@ -412,8 +423,12 @@ def _resume_pending_model_analysis(
     if not pending:
         return
     pending.pop("message", None)
+    pending.pop(_MODEL_DECISION_RESUME_KEY, None)
+    pending.pop("allow_model_download", None)
+    pending.pop("skip_transcription", None)
     _clear_pending_analysis_state()
     _queue_analysis(
+        **{_MODEL_DECISION_RESUME_KEY: True},
         allow_model_download=allow_model_download,
         skip_transcription=skip_transcription,
         **pending,
@@ -509,6 +524,9 @@ def _render_model_decision(db_path: Path) -> bool:
             ):
                 set_model_download_consent("deny", db_path)
                 _resume_pending_model_analysis(db_path, skip_transcription=True)
+        st.caption(
+            "Cancel analysis stops only this run. It does not change model download permission."
+        )
         if st.button("Cancel analysis", width="stretch"):
             outcome, current_job = _cancel_pending_analysis_job(
                 db_path,

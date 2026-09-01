@@ -5,10 +5,13 @@ from highlightminer import ui_mine
 from highlightminer.analysis_jobs import (
     AnalysisJobStateError,
     AnalysisJobTerminalError,
+    create_analysis_job,
     load_analysis_job,
+    mark_analysis_job_awaiting_input,
+    start_analysis_job,
 )
 from highlightminer.config import Settings
-from highlightminer.model_access import ModelDecisionRequired
+from highlightminer.model_access import ModelDecisionRequired, load_model_access
 from highlightminer.storage import register_source
 from highlightminer.ui_common import (
     hydrate_persistent_widget,
@@ -244,6 +247,29 @@ def test_cancel_pending_job_clears_missing_job(monkeypatch, tmp_path) -> None:
     assert job is None
 
 
+def test_cancel_pending_job_preserves_ask_before_download_policy(tmp_path: Path) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"video")
+    db = tmp_path / "highlightminer.db"
+    source = register_source(
+        db,
+        {
+            "fingerprint": "source-fingerprint",
+            "path": str(video),
+            "video_name": video.name,
+            "file_size": video.stat().st_size,
+        },
+    )
+    job = create_analysis_job(db, source, {"settings": {}})
+    start_analysis_job(db, job["id"])
+    mark_analysis_job_awaiting_input(db, job["id"], message="Choose a model")
+
+    outcome, _ = ui_mine._cancel_pending_analysis_job(db, job["id"])
+
+    assert outcome == "cancelled"
+    assert load_model_access(db).download_consent == "unset"
+
+
 def test_cancel_cleanup_removes_pending_and_queued_worker_state(monkeypatch) -> None:
     state = {
         ui_mine._QUEUED_ANALYSIS_KEY: {"analysis_job_id": "job-123"},
@@ -280,6 +306,81 @@ def test_queued_job_is_restored_after_streamlit_state_cleanup(monkeypatch, tmp_p
     assert queued["analysis_job_id"] == "job-123"
     assert queued["analysis_title"] == "Snapshot title"
     assert state[ui_mine._ANALYSIS_RUNNING_KEY] is True
+
+
+def test_waiting_job_is_not_reprompted_while_model_decision_resume_is_queued(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    state = {
+        ui_mine._QUEUED_ANALYSIS_KEY: {
+            "analysis_job_id": "job-123",
+            ui_mine._MODEL_DECISION_RESUME_KEY: True,
+        },
+        ui_mine._ANALYSIS_RUNNING_KEY: True,
+    }
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    monkeypatch.setattr(
+        ui_mine,
+        "find_active_analysis_job",
+        lambda _db: _active_job("awaiting_input"),
+    )
+
+    ui_mine._restore_persistent_analysis_state(tmp_path / "highlightminer.db")
+
+    assert ui_mine._PENDING_MODEL_ANALYSIS_KEY not in state
+
+
+def test_model_decision_choices_resume_the_waiting_job(monkeypatch, tmp_path: Path) -> None:
+    class SessionState(dict):
+        __setattr__ = dict.__setitem__
+
+    choices = [
+        {"allow_model_download": True, "skip_transcription": False},
+        {"allow_model_download": False, "skip_transcription": False},
+        {"allow_model_download": False, "skip_transcription": True},
+    ]
+
+    for choice in choices:
+        state = SessionState(
+            {
+                ui_mine._PENDING_MODEL_ANALYSIS_KEY: {
+                    **ui_mine._job_analysis_args(_active_job("awaiting_input")),
+                    "message": "Choose a model",
+                },
+            }
+        )
+        observed: dict[str, object] = {}
+        monkeypatch.setattr(ui_mine.st, "session_state", state)
+        monkeypatch.setattr(ui_mine.st, "rerun", lambda: None)
+        monkeypatch.setattr(
+            ui_mine,
+            "load_analysis_job",
+            lambda _db, _job: _active_job("awaiting_input"),
+        )
+
+        def run_analysis(**kwargs):
+            observed.update(kwargs)
+            return "analysis-123"
+
+        monkeypatch.setattr(ui_mine, "_run_analysis_ui", run_analysis)
+
+        ui_mine._resume_pending_model_analysis(
+            tmp_path / "highlightminer.db",
+            **choice,
+        )
+        assert state[ui_mine._QUEUED_ANALYSIS_KEY][ui_mine._MODEL_DECISION_RESUME_KEY] is True
+
+        ui_mine._run_queued_analysis(tmp_path / "highlightminer.db")
+
+        assert observed["analysis_job_id"] == "job-123"
+        assert observed["allow_model_download"] is choice["allow_model_download"]
+        assert observed["skip_transcription"] is choice["skip_transcription"]
+        assert ui_mine._MODEL_DECISION_RESUME_KEY not in observed
+        assert state["analysis_id"] == "analysis-123"
+        assert ui_mine._PENDING_MODEL_ANALYSIS_KEY not in state
+        assert ui_mine._QUEUED_ANALYSIS_KEY not in state
+        assert ui_mine._ANALYSIS_RUNNING_KEY not in state
 
 
 def test_rerun_does_not_launch_a_second_worker_for_running_job(monkeypatch, tmp_path: Path) -> None:

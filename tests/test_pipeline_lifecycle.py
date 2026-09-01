@@ -8,6 +8,7 @@ from highlightminer import pipeline
 from highlightminer.analysis_jobs import (
     AnalysisJobStateError,
     AnalysisJobTerminalError,
+    cancel_analysis_job,
     create_analysis_job,
     interrupt_analysis_job,
     list_analysis_job_events,
@@ -116,6 +117,31 @@ def test_model_decision_resumes_same_job_with_original_settings_snapshot(tmp_pat
     assert "transcription.skip_requested" in event_names
     assert "transcription.skipped" in event_names
     assert event_names[-1] == "job.completed"
+
+
+def test_cancelled_model_decision_asks_again_when_download_policy_is_unset(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    video = tmp_path / "vod.mp4"
+    video.write_bytes(b"video")
+    db = tmp_path / "highlightminer.db"
+    _stub_pipeline(monkeypatch)
+
+    def require_decision(*_args, **_kwargs):
+        raise ModelDecisionRequired("Choose how to handle the missing model")
+
+    monkeypatch.setattr(pipeline, "resolve_model_reference", require_decision)
+
+    with pytest.raises(ModelDecisionRequired) as first:
+        pipeline.analyze_vod(video, tmp_path, Settings(), db_path=db)
+
+    assert cancel_analysis_job(db, str(first.value.analysis_job_id)) is True
+
+    with pytest.raises(ModelDecisionRequired) as second:
+        pipeline.analyze_vod(video, tmp_path, Settings(), db_path=db)
+
+    assert second.value.analysis_job_id != first.value.analysis_job_id
 
 
 def test_force_full_reprocess_never_reads_prior_evidence(tmp_path: Path, monkeypatch) -> None:
