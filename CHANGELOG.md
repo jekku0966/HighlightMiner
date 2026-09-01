@@ -4,6 +4,11 @@ All notable changes to HighlightMiner will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed the missing-model decision buttons so downloading, choosing a local model, or continuing without speech resumes the waiting analysis job instead of reopening the same prompt.
+- Cancelling a missing-model prompt now explicitly leaves model-download permission unchanged, so the app asks again on the next analysis unless the user chose a persistent model-access policy.
+
 ### Added
 
 - Added a dedicated in-app **Settings** page backed by `highlightminer.db`, so normal desktop use no longer requires hand-editing `settings.json`.
