@@ -64,7 +64,17 @@ def test_editable_timestamp_parser_accepts_supported_forms(
 
 @pytest.mark.parametrize(
     "value",
-    ["", "not-a-time", "-00:01", "00:60", "01:60:00", "00:00:60", "nan", "inf"],
+    [
+        "",
+        "not-a-time",
+        "-00:01",
+        "00:60",
+        "01:60:00",
+        "00:00:60",
+        "nan",
+        "inf",
+        f"{'9' * 400}:00:00",
+    ],
 )
 def test_editable_timestamp_parser_rejects_invalid_values(value: str) -> None:
     assert parse_editable_time(value) is None

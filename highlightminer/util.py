@@ -78,7 +78,8 @@ def parse_editable_time(value: Any) -> float | None:
             seconds = float(seconds_text)
             if not math.isfinite(seconds) or not 0.0 <= seconds < 60.0:
                 return None
-            return minutes * 60.0 + seconds
+            total = minutes * 60.0 + seconds
+            return total if math.isfinite(total) else None
         if len(parts) == 3:
             hours_text, minutes_text, seconds_text = parts
             if not hours_text.isdigit() or not minutes_text.isdigit():
@@ -88,8 +89,9 @@ def parse_editable_time(value: Any) -> float | None:
             seconds = float(seconds_text)
             if minutes >= 60 or not math.isfinite(seconds) or not 0.0 <= seconds < 60.0:
                 return None
-            return hours * 3600.0 + minutes * 60.0 + seconds
-    except ValueError:
+            total = hours * 3600.0 + minutes * 60.0 + seconds
+            return total if math.isfinite(total) else None
+    except (OverflowError, ValueError):
         return None
     return None
 
