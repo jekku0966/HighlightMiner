@@ -39,6 +39,46 @@ def test_widget_backing_state_survives_streamlit_widget_cleanup() -> None:
     assert state[persisted_widget_key("video_path_input")] == r"D:\VODs\selected.mp4"
 
 
+def test_exit_button_is_disabled_when_stopping_would_interrupt_work(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    shutdown_file = tmp_path / "shutdown.flag"
+    monkeypatch.setenv("HIGHLIGHTMINER_SHUTDOWN_FILE", str(shutdown_file))
+    app = AppTest.from_string(
+        "from highlightminer.ui_common import render_shutdown\n"
+        "render_shutdown(block_reason='Analysis is running.')\n"
+    ).run()
+
+    exit_button = next(button for button in app.button if button.label == "🛑 Exit HighlightMiner")
+    assert exit_button.disabled is True
+    assert any("Analysis is running." in caption.value for caption in app.caption)
+    assert not shutdown_file.exists()
+
+
+def test_settings_exit_uses_the_same_active_work_guard(monkeypatch, tmp_path: Path) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    shutdown_file = tmp_path / "shutdown.flag"
+    db_path = tmp_path / "highlightminer.db"
+    monkeypatch.setenv("HIGHLIGHTMINER_SHUTDOWN_FILE", str(shutdown_file))
+    app = AppTest.from_string(
+        "from pathlib import Path\n"
+        "import highlightminer.app as app\n"
+        f"app.default_db_path = lambda: Path({str(db_path)!r})\n"
+        "app.active_work_shutdown_block_reason = lambda _db: 'Export is running.'\n"
+        "app._render_app()\n"
+    ).run()
+
+    app.radio[0].set_value("⚙️ Settings").run()
+
+    exit_button = next(button for button in app.button if button.label == "🛑 Exit HighlightMiner")
+    assert exit_button.disabled is True
+    assert any("Export is running." in caption.value for caption in app.caption)
+
+
 def test_load_latest_skips_newer_incompatible_analysis_formats() -> None:
     runs = [
         {"id": "future", "compatible": False},

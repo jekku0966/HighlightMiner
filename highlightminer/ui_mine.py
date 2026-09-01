@@ -53,6 +53,7 @@ from .security import validate_chat_file, validate_local_video
 from .settings_presets import detect_weight_preset, normalize_weights
 from .settings_store import load_app_settings
 from .storage import find_source_runs, import_legacy_analysis, learning_summary, list_analyses, load_analysis
+from .shutdown import active_work_shutdown_block_reason
 from .transcription_status import is_transcription_skipped
 from .ui_common import (
     _CHAT_FILTER,
@@ -1207,7 +1208,7 @@ def render_mine_page(db_path: Path) -> None:
         )
         _render_history_sidebar(db_path, disabled=controls_locked)
         st.caption(f"Database: `{db_path}`")
-        render_shutdown()
+        render_shutdown(block_reason=active_work_shutdown_block_reason(db_path))
 
     error = st.session_state.pop("analysis_error", None)
     if error:

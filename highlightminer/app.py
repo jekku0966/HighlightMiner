@@ -8,6 +8,7 @@ from highlightminer.analysis_jobs import recover_stale_analysis_jobs
 from highlightminer.database_diagnostics import initialize_database_with_diagnostics
 from highlightminer.diagnostics import log_event, log_exception, log_startup
 from highlightminer.storage import default_db_path
+from highlightminer.shutdown import active_work_shutdown_block_reason
 from highlightminer.ui_common import render_shutdown
 from highlightminer.ui_mine import analysis_is_running, render_mine_page
 from highlightminer.ui_settings import render_settings_page
@@ -66,7 +67,7 @@ def _render_app() -> None:
     if page == "⚙️ Settings":
         with st.sidebar:
             st.caption(f"Database: `{db_path}`")
-            render_shutdown()
+            render_shutdown(block_reason=active_work_shutdown_block_reason(db_path))
         render_settings_page(db_path)
         return
 

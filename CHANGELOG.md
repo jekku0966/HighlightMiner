@@ -29,6 +29,7 @@ All notable changes to HighlightMiner will be documented here.
 
 ### Changed
 
+- Native-window close and the in-app **Exit HighlightMiner** control are now locked while a non-cancellable analysis or export stage is active, preventing an apparent app exit from terminating the shared worker mid-operation.
 - The desktop Mine/Review flow now reads the active Settings profile from SQLite; each analysis still stores an immutable settings snapshot for historical comparison and future preference learning.
 - The old Settings-file picker was removed from normal Mine/Review UI. JSON remains a validated migration/interchange/backup format rather than the primary desktop configuration surface.
 - PyInstaller explicitly bundles the Settings/Mine UI modules that are dynamically imported by Streamlit, and Windows packaging includes `SETTINGS.md`.

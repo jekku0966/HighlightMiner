@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Callable
 
 from .config import Settings
 from .desktop import (
@@ -27,6 +28,7 @@ from .review import load_review
 from .runtime import app_root, bundled_path, is_frozen
 from .security import validate_local_video
 from .settings_store import load_app_settings
+from .shutdown import clear_shutdown_admission, request_shutdown_admission
 from .storage import (
     default_db_path,
     import_legacy_analysis,
@@ -140,10 +142,28 @@ def _stop_ui_process(process: subprocess.Popen) -> None:
         pass
 
 
-def _monitor_ui_process(process: subprocess.Popen, shutdown_file: Path) -> bool:
+def _monitor_ui_process(
+    process: subprocess.Popen,
+    shutdown_file: Path,
+    *,
+    shutdown_blocker: Callable[[], str | None] | None = None,
+) -> bool:
     shutdown_requested = False
     while process.poll() is None:
         if shutdown_file.exists():
+            block_reason = None
+            if shutdown_blocker is not None:
+                try:
+                    block_reason = shutdown_blocker()
+                except Exception as exc:
+                    block_reason = (
+                        "HighlightMiner could not verify whether background work is active "
+                        f"({type(exc).__name__}: {exc}). Wait and try exiting again."
+                    )
+            if block_reason:
+                print(f"Shutdown blocked: {block_reason}", flush=True)
+                shutdown_file.unlink(missing_ok=True)
+                continue
             shutdown_requested = True
             print("Shutdown requested from HighlightMiner UI...", flush=True)
             time.sleep(0.75)
@@ -163,6 +183,9 @@ def cmd_ui(args: argparse.Namespace | None = None) -> int:
 
     shutdown_file = Path(tempfile.gettempdir()) / f"highlightminer-shutdown-{os.getpid()}.flag"
     shutdown_file.unlink(missing_ok=True)
+    db_path = default_db_path()
+    clear_shutdown_admission(db_path)
+    shutdown_blocker = lambda: request_shutdown_admission(db_path)
     env = os.environ.copy()
     env["HIGHLIGHTMINER_SHUTDOWN_FILE"] = str(shutdown_file)
     env["STREAMLIT_SERVER_HEADLESS"] = "true"
@@ -198,6 +221,7 @@ def cmd_ui(args: argparse.Namespace | None = None) -> int:
                     shutdown_file,
                     url=UI_URL,
                     stop_backend=lambda: _stop_ui_process(process),
+                    shutdown_blocker=shutdown_blocker,
                 )
                 shutdown_requested = shutdown_file.exists()
                 desktop_closed_normally = process.poll() is None or shutdown_requested
@@ -213,9 +237,17 @@ def cmd_ui(args: argparse.Namespace | None = None) -> int:
                 raise RuntimeError(message) from exc
         elif mode == "browser":
             open_system_browser(UI_URL)
-            shutdown_requested = _monitor_ui_process(process, shutdown_file)
+            shutdown_requested = _monitor_ui_process(
+                process,
+                shutdown_file,
+                shutdown_blocker=shutdown_blocker,
+            )
         elif mode == "server":
-            shutdown_requested = _monitor_ui_process(process, shutdown_file)
+            shutdown_requested = _monitor_ui_process(
+                process,
+                shutdown_file,
+                shutdown_blocker=shutdown_blocker,
+            )
         else:
             raise RuntimeError(f"Unsupported UI mode: {mode}")
     except KeyboardInterrupt:
@@ -224,6 +256,16 @@ def cmd_ui(args: argparse.Namespace | None = None) -> int:
         if process.poll() is None:
             _stop_ui_process(process)
         shutdown_file.unlink(missing_ok=True)
+        if process.poll() is not None:
+            try:
+                clear_shutdown_admission(db_path)
+            except Exception as exc:
+                print(
+                    "Warning: could not clear the shutdown admission marker "
+                    f"({type(exc).__name__}: {exc}).",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
     return_code = process.wait()
     if shutdown_requested or desktop_closed_normally:

@@ -81,6 +81,8 @@ def run_desktop_shell(
     *,
     url: str = UI_URL,
     stop_backend: Callable[[], None] | None = None,
+    shutdown_blocker: Callable[[], str | None] | None = None,
+    notify_shutdown_blocked: Callable[[str], None] | None = None,
 ) -> None:
     """Display Streamlit inside a native Windows pywebview/WebView2 window."""
     if os.name != "nt":
@@ -119,10 +121,24 @@ def run_desktop_shell(
             except Exception:
                 pass
 
-    def request_orderly_shutdown() -> None:
+    def request_orderly_shutdown() -> bool:
         with shutdown_lock:
             if shutdown_started.is_set():
-                return
+                return True
+            if shutdown_blocker is not None:
+                try:
+                    block_reason = shutdown_blocker()
+                except Exception as exc:
+                    block_reason = (
+                        "HighlightMiner could not verify whether background work is active "
+                        f"({type(exc).__name__}: {exc}). Wait and try exiting again."
+                    )
+                if block_reason:
+                    notifier = notify_shutdown_blocked or (
+                        lambda message: show_native_warning("HighlightMiner is still working", message)
+                    )
+                    notifier(block_reason)
+                    return False
             shutdown_started.set()
             try:
                 shutdown_file.touch()
@@ -133,6 +149,7 @@ def run_desktop_shell(
                 name="HighlightMiner-ui-stop",
                 daemon=True,
             ).start()
+            return True
 
     def on_closing() -> bool | None:
         # Keep WebView2 alive until Streamlit has stopped so Windows does not
@@ -156,8 +173,12 @@ def run_desktop_shell(
                     pass
                 return
             if shutdown_file.exists():
-                request_orderly_shutdown()
-                return
+                if request_orderly_shutdown():
+                    return
+                try:
+                    shutdown_file.unlink(missing_ok=True)
+                except OSError:
+                    return
 
     watcher = threading.Thread(target=watch_backend, name="HighlightMiner-ui-watch", daemon=True)
     watcher.start()
@@ -176,5 +197,15 @@ def show_native_error(title: str, message: str) -> None:
         return
     try:
         ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+    except Exception:
+        pass
+
+
+def show_native_warning(title: str, message: str) -> None:
+    """Show a native warning when closing would interrupt active work."""
+    if os.name != "nt":
+        return
+    try:
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x30)
     except Exception:
         pass

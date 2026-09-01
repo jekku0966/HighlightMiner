@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Iterable
 
 from .diagnostics import log_event, log_exception
+from .shutdown import ensure_work_admitted
 from .storage import connect, utc_now
 
 EXPORT_BATCH_HEARTBEAT_INTERVAL_SECONDS = 5.0
@@ -190,6 +191,7 @@ def start_export_batch(db_path: str | Path | None) -> tuple[dict, list[dict]]:
     batch_id = uuid.uuid4().hex
     with connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
+        ensure_work_admitted(conn)
         active = conn.execute(
             "SELECT id FROM export_batches WHERE status = 'running' LIMIT 1"
         ).fetchone()
