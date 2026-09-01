@@ -256,6 +256,18 @@ def _latest_compatible_run(runs: list[dict]) -> dict | None:
     return next((run for run in runs if bool(run.get("compatible", True))), None)
 
 
+def _rerun_source_matches_video(pending: dict, video_path: str) -> bool:
+    """Keep a rerun decision tied to the VOD that produced its history lookup."""
+    stored_path = str(pending.get("video_path") or "").strip()
+    current_path = str(video_path or "").strip()
+    if not stored_path or not current_path:
+        return False
+    try:
+        return Path(stored_path).expanduser().resolve() == Path(current_path).expanduser().resolve()
+    except (OSError, RuntimeError):
+        return False
+
+
 def _analysis_delete_confirmation_matches(analysis_id: str, entered: str) -> bool:
     return bool(analysis_id) and str(entered).strip() == str(analysis_id)
 
@@ -665,7 +677,22 @@ def _render_analysis_controls(
     if _render_model_decision(db_path):
         return
 
-    if st.button("⛏️ Analyze VOD", type="primary", width="stretch"):
+    required_inputs_ready = bool(str(video_path).strip() and str(work_dir).strip())
+    pending = st.session_state.get(_PENDING_RERUN_KEY)
+    if pending and not _rerun_source_matches_video(pending, video_path):
+        st.session_state.pop(_PENDING_RERUN_KEY, None)
+        pending = None
+        st.info("The VOD selection changed, so the previous rerun choice was cleared.")
+
+    if not required_inputs_ready:
+        st.caption("Choose a VOD and work folder before starting analysis.")
+
+    if st.button(
+        "⛏️ Analyze VOD",
+        type="primary",
+        width="stretch",
+        disabled=not required_inputs_ready or pending is not None,
+    ):
         source = None
         try:
             source, prior_runs = find_source_runs(db_path, video_path)
@@ -691,7 +718,6 @@ def _render_analysis_controls(
         except Exception as exc:
             st.exception(exc)
 
-    pending = st.session_state.get(_PENDING_RERUN_KEY)
     if not pending:
         return
     runs = pending.get("runs", [])
@@ -722,7 +748,12 @@ def _render_analysis_controls(
         st.session_state.analysis_id = latest["id"]
         st.session_state.pop(_PENDING_RERUN_KEY, None)
         st.rerun()
-    if r2.button("Analyze again", type="primary", width="stretch"):
+    if r2.button(
+        "Analyze again",
+        type="primary",
+        width="stretch",
+        disabled=not required_inputs_ready,
+    ):
         try:
             job = _create_queued_analysis_job(
                 db_path,
@@ -739,7 +770,11 @@ def _render_analysis_controls(
             st.rerun()
         except Exception as exc:
             st.exception(exc)
-    if r3.button("Force full reprocess", width="stretch"):
+    if r3.button(
+        "Force full reprocess",
+        width="stretch",
+        disabled=not required_inputs_ready,
+    ):
         try:
             job = _create_queued_analysis_job(
                 db_path,

@@ -34,6 +34,7 @@ All notable changes to HighlightMiner will be documented here.
 
 ### Changed
 
+- Analysis cannot start until both a VOD and work folder are selected, and changing the VOD clears any stale rerun decision tied to the previous source.
 - Streamlit now uses its supported minimal toolbar mode in source, packaged desktop, and browser-fallback launches; app headings no longer expose permalink anchors.
 - Native-window close and the in-app **Exit HighlightMiner** control are now locked while a non-cancellable analysis or export stage is active, preventing an apparent app exit from terminating the shared worker mid-operation.
 - The desktop Mine/Review flow now reads the active Settings profile from SQLite; each analysis still stores an immutable settings snapshot for historical comparison and future preference learning.

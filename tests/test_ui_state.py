@@ -53,7 +53,7 @@ def test_exit_button_is_disabled_when_stopping_would_interrupt_work(
     app = AppTest.from_string(
         "from highlightminer.ui_common import render_shutdown\n"
         "render_shutdown(block_reason='Analysis is running.')\n"
-    ).run()
+    ).run(timeout=10)
 
     exit_button = next(button for button in app.button if button.label == "🛑 Exit HighlightMiner")
     assert exit_button.disabled is True
@@ -73,7 +73,7 @@ def test_settings_exit_uses_the_same_active_work_guard(monkeypatch, tmp_path: Pa
         f"app.default_db_path = lambda: Path({str(db_path)!r})\n"
         "app.active_work_shutdown_block_reason = lambda _db: 'Export is running.'\n"
         "app._render_app()\n"
-    ).run()
+    ).run(timeout=10)
 
     app.radio[0].set_value("⚙️ Settings").run()
 
@@ -91,6 +91,69 @@ def test_load_latest_skips_newer_incompatible_analysis_formats() -> None:
 
     assert ui_mine._latest_compatible_run(runs)["id"] == "latest-loadable"
     assert ui_mine._latest_compatible_run([runs[0]]) is None
+
+
+def test_rerun_choice_stays_bound_to_the_original_vod(tmp_path: Path) -> None:
+    original = tmp_path / "original.mp4"
+    replacement = tmp_path / "replacement.mp4"
+    pending = {"video_path": str(original.resolve())}
+
+    assert ui_mine._rerun_source_matches_video(pending, str(original)) is True
+    assert ui_mine._rerun_source_matches_video(pending, str(replacement)) is False
+    assert ui_mine._rerun_source_matches_video(pending, "") is False
+
+
+def test_empty_source_keeps_analysis_action_disabled(monkeypatch, tmp_path: Path) -> None:
+    state: dict[str, object] = {}
+    buttons: list[tuple[str, bool]] = []
+    captions: list[str] = []
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    monkeypatch.setattr(
+        ui_mine.st,
+        "button",
+        lambda label, **kwargs: buttons.append((label, bool(kwargs.get("disabled")))) or False,
+    )
+    monkeypatch.setattr(ui_mine.st, "caption", captions.append)
+
+    ui_mine._render_analysis_controls(
+        tmp_path / "highlightminer.db",
+        "",
+        "",
+        "",
+        "",
+        "",
+    )
+
+    assert buttons == [("⛏️ Analyze VOD", True)]
+    assert captions == ["Choose a VOD and work folder before starting analysis."]
+
+
+def test_changing_source_clears_stale_rerun_choice(monkeypatch, tmp_path: Path) -> None:
+    old_video = tmp_path / "old.mp4"
+    new_video = tmp_path / "new.mp4"
+    state = {
+        ui_mine._PENDING_RERUN_KEY: {
+            "video_path": str(old_video.resolve()),
+            "source": {"id": "old-source"},
+            "runs": [],
+        }
+    }
+    notices: list[str] = []
+    monkeypatch.setattr(ui_mine.st, "session_state", state)
+    monkeypatch.setattr(ui_mine.st, "info", notices.append)
+    monkeypatch.setattr(ui_mine.st, "button", lambda *_args, **_kwargs: False)
+
+    ui_mine._render_analysis_controls(
+        tmp_path / "highlightminer.db",
+        str(new_video),
+        "",
+        "",
+        "",
+        str(tmp_path / "work"),
+    )
+
+    assert ui_mine._PENDING_RERUN_KEY not in state
+    assert notices == ["The VOD selection changed, so the previous rerun choice was cleared."]
 
 
 def test_analysis_deletion_requires_the_full_exact_id() -> None:
