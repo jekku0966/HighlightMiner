@@ -55,7 +55,10 @@ from .settings_store import load_app_settings
 from .storage import find_source_runs, import_legacy_analysis, learning_summary, list_analyses, load_analysis
 from .shutdown import active_work_shutdown_block_reason
 from .timestamps import ClipBounds, normalize_clip_bounds
-from .transcription_status import is_transcription_skipped
+from .transcription_status import (
+    SKIP_REASON_MODEL_DOWNLOADS_DISABLED,
+    is_transcription_skipped,
+)
 from .ui_common import (
     _CHAT_FILTER,
     _JSON_FILTER,
@@ -309,6 +312,21 @@ def _rerun_source_matches_video(pending: dict, video_path: str) -> bool:
 
 def _analysis_delete_confirmation_matches(analysis_id: str, entered: str) -> bool:
     return bool(analysis_id) and str(entered).strip() == str(analysis_id)
+
+
+def _transcription_skip_notice(metadata: dict) -> str:
+    if str(metadata.get("reason") or "") == SKIP_REASON_MODEL_DOWNLOADS_DISABLED:
+        return (
+            "Speech recognition was disabled because model downloads are set to "
+            "**Never download models** and no compatible local or cached model was found. "
+            "To enable speech, open **Settings → Analysis engine → Model access**, choose "
+            "**Ask before any download** or **Allow model downloads**, save, then run "
+            "**Force full reprocess**."
+        )
+    return (
+        "Speech recognition was disabled for this run. Candidate scoring was "
+        "renormalized across audio and available chat signals."
+    )
 
 
 def _run_analysis_ui(
@@ -781,6 +799,13 @@ def _render_analysis_controls(
         "**Load latest** does no work. **Analyze again** creates a new run with current settings and "
         "reuses only matching evidence. **Force full reprocess** ignores all prior evidence."
     )
+    model_access = load_model_access(db_path)
+    if model_access.download_consent == "deny" and not model_access.local_model_path:
+        st.warning(
+            "Speech recognition may be skipped: Model access is set to **Never download models** "
+            "and no local model is selected. Change it under **Settings → Analysis engine → "
+            "Model access** before reprocessing if you want a fresh transcript."
+        )
     r1, r2, r3 = st.columns(3)
     if r1.button("Load latest", width="stretch", disabled=latest is None):
         assert latest is not None
@@ -991,7 +1016,7 @@ def _render_review(db_path: Path) -> None:
         f"source run **{analysis.get('run_number', 1)}** · Analysis ID: `{analysis_id[:12]}`{cache_text}"
     )
     if transcription_skipped:
-        st.info("Speech recognition was disabled for this run. Candidate scoring was renormalized across audio and available chat signals.")
+        st.info(_transcription_skip_notice(transcription))
     if not candidates:
         st.warning("No candidates cleared the current threshold. Adjust Settings and analyze again.")
         return
