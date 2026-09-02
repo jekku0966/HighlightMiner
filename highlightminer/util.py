@@ -48,6 +48,54 @@ def format_time(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}{fraction}"
 
 
+def format_editable_time(seconds: float) -> str:
+    """Format an editable media timestamp without an unnecessary hour field."""
+    label = format_time(seconds)
+    return label[3:] if label.startswith("00:") else label
+
+
+def parse_editable_time(value: Any) -> float | None:
+    """Parse non-negative seconds, MM:SS, or HH:MM:SS media timestamps."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        seconds = float(value)
+        return seconds if math.isfinite(seconds) and seconds >= 0.0 else None
+
+    text = str(value).strip().replace(",", ".")
+    if not text:
+        return None
+    parts = text.split(":")
+    try:
+        if len(parts) == 1:
+            seconds = float(parts[0])
+            return seconds if math.isfinite(seconds) and seconds >= 0.0 else None
+        if len(parts) == 2:
+            minutes_text, seconds_text = parts
+            if not minutes_text.isdigit():
+                return None
+            minutes = int(minutes_text)
+            seconds = float(seconds_text)
+            if not math.isfinite(seconds) or not 0.0 <= seconds < 60.0:
+                return None
+            total = minutes * 60.0 + seconds
+            return total if math.isfinite(total) else None
+        if len(parts) == 3:
+            hours_text, minutes_text, seconds_text = parts
+            if not hours_text.isdigit() or not minutes_text.isdigit():
+                return None
+            hours = int(hours_text)
+            minutes = int(minutes_text)
+            seconds = float(seconds_text)
+            if minutes >= 60 or not math.isfinite(seconds) or not 0.0 <= seconds < 60.0:
+                return None
+            total = hours * 3600.0 + minutes * 60.0 + seconds
+            return total if math.isfinite(total) else None
+    except (OverflowError, ValueError):
+        return None
+    return None
+
+
 def parse_time(value: Any) -> float | None:
     if value is None:
         return None

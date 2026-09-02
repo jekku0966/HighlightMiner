@@ -54,6 +54,7 @@ from .settings_presets import detect_weight_preset, normalize_weights
 from .settings_store import load_app_settings
 from .storage import find_source_runs, import_legacy_analysis, learning_summary, list_analyses, load_analysis
 from .shutdown import active_work_shutdown_block_reason
+from .timestamps import ClipBounds, normalize_clip_bounds
 from .transcription_status import is_transcription_skipped
 from .ui_common import (
     _CHAT_FILTER,
@@ -66,7 +67,7 @@ from .ui_common import (
     render_shutdown,
 )
 from .ui_style import MODEL_ACCESS_CHOICES_KEY, model_access_choices_css
-from .util import format_time
+from .util import format_editable_time, format_time, parse_editable_time
 
 _PENDING_MODEL_ANALYSIS_KEY = "pending_model_analysis"
 _PENDING_RERUN_KEY = "pending_rerun"
@@ -77,6 +78,44 @@ _PREVIEW_ACTIVE_KEY = "preview_active_candidate"
 _PREVIEW_CLOSED_KEY = "preview_closed"
 _PENDING_DELETE_ANALYSIS_KEY = "pending_delete_analysis_id"
 _CONTINUE_WITHOUT_SPEECH_LABEL = "Continue without\nspeech"
+
+
+def _clip_editor_value(value: str, original_seconds: float) -> float:
+    """Parse an editor value while preserving an untouched precise boundary."""
+    text = str(value).strip()
+    original = float(original_seconds)
+    if text == format_editable_time(original):
+        return original
+    parsed = parse_editable_time(text)
+    if parsed is None:
+        raise ValueError("Use MM:SS or HH:MM:SS, with optional fractional seconds.")
+    return parsed
+
+
+def _clip_editor_bounds(
+    start_value: str,
+    end_value: str,
+    *,
+    original_start: float,
+    original_end: float,
+    source_duration: float,
+) -> ClipBounds:
+    """Validate edited clip timestamps against the source timeline."""
+    message = (
+        "Enter a valid clip range using MM:SS or HH:MM:SS. "
+        "The end must be at least 0.1 seconds after the start, and both must stay within the VOD."
+    )
+    try:
+        start = _clip_editor_value(start_value, original_start)
+        end = _clip_editor_value(end_value, original_end)
+        if end <= start or end - start < 0.1 - 1e-9:
+            raise ValueError
+        bounds = normalize_clip_bounds(start, end, source_duration)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if bounds.meaningfully_invalid:
+        raise ValueError(message)
+    return bounds
 
 
 def analysis_is_running(db_path: Path | None = None) -> bool:
@@ -968,29 +1007,69 @@ def _render_review(db_path: Path) -> None:
     selected_label = st.selectbox("Review candidate", labels)
     candidate = candidates[labels.index(selected_label)]
     item = review["items"][candidate["id"]]
+    original_start = float(item["start"])
+    original_end = float(item["end"])
 
     preview_token = f"{analysis_id}:{candidate['id']}"
+    preview_bounds_key = f"preview_bounds_{analysis_id}_{candidate['id']}"
     candidate_changed = st.session_state.get(_PREVIEW_ACTIVE_KEY) != preview_token
     if candidate_changed:
         st.session_state[_PREVIEW_ACTIVE_KEY] = preview_token
         st.session_state[_PREVIEW_CLOSED_KEY] = False
+        st.session_state.setdefault(preview_bounds_key, (original_start, original_end))
 
     st.subheader(f"🎞️ {candidate['id']} — {candidate['reason']}", anchor=False)
     with st.form(f"clip_timing_form_{analysis_id}_{candidate['id']}"):
         left, right = st.columns(2)
         with left:
-            start = st.number_input("Clip start (seconds)", min_value=0.0, max_value=float(analysis["duration"]), value=float(item["start"]), step=1.0, key=f"start_{analysis_id}_{candidate['id']}")
+            start_value = st.text_input(
+                "Clip start",
+                value=format_editable_time(original_start),
+                key=f"clip_start_time_{analysis_id}_{candidate['id']}",
+                help="Use MM:SS or HH:MM:SS. Fractional seconds are optional.",
+            )
         with right:
-            end = st.number_input("Clip end (seconds)", min_value=0.1, max_value=float(analysis["duration"]), value=float(item["end"]), step=1.0, key=f"end_{analysis_id}_{candidate['id']}")
+            end_value = st.text_input(
+                "Clip end",
+                value=format_editable_time(original_end),
+                key=f"clip_end_time_{analysis_id}_{candidate['id']}",
+                help="Use MM:SS or HH:MM:SS. Fractional seconds are optional.",
+            )
         update_preview = st.form_submit_button("Update preview", type="primary", width="stretch")
 
-    if update_preview:
-        st.session_state[_PREVIEW_CLOSED_KEY] = False
+    try:
+        edited_bounds = _clip_editor_bounds(
+            start_value,
+            end_value,
+            original_start=original_start,
+            original_end=original_end,
+            source_duration=float(analysis["duration"]),
+        )
+    except ValueError as exc:
+        timing_valid = False
+        edited_start = original_start
+        edited_end = original_end
+        st.error(str(exc))
+        st.caption("Preview was not updated; it remains at the last valid range.")
+    else:
+        timing_valid = True
+        edited_start = edited_bounds.start
+        edited_end = edited_bounds.end
 
-    preview_end = max(float(end), float(start) + 0.1)
+    if update_preview and timing_valid:
+        st.session_state[_PREVIEW_CLOSED_KEY] = False
+        st.session_state[preview_bounds_key] = (edited_start, edited_end)
+
+    preview_start, preview_end = st.session_state.get(
+        preview_bounds_key,
+        (original_start, original_end),
+    )
+    preview_start = float(preview_start)
+    preview_end = float(preview_end)
+
     preview_dir = Path(analysis["work_dir"]) / ".previews" / analysis_id
     preview_slot = st.empty()
-    if candidate_changed or update_preview:
+    if candidate_changed or (update_preview and timing_valid):
         preview_slot.empty()
 
     preview_closed = bool(st.session_state.get(_PREVIEW_CLOSED_KEY, False))
@@ -1003,9 +1082,18 @@ def _render_review(db_path: Path) -> None:
         else:
             try:
                 with st.spinner("Preparing lightweight preview…"):
-                    preview = create_preview_clip(source_video, preview_dir, candidate["id"], float(start), preview_end)
+                    preview = create_preview_clip(
+                        source_video,
+                        preview_dir,
+                        candidate["id"],
+                        preview_start,
+                        preview_end,
+                    )
                 preview_slot.video(str(preview.path), width=640)
-                st.caption(f"Local preview only: {format_time(float(start))} → {format_time(preview_end)}. The full source VOD is never sent to the UI player.")
+                st.caption(
+                    f"Local preview only: {format_time(preview_start)} → {format_time(preview_end)}. "
+                    "The full source VOD is never sent to the UI player."
+                )
                 if preview.cleanup_failures:
                     st.warning(
                         "Preview ready, but Windows is still holding "
@@ -1037,14 +1125,14 @@ def _render_review(db_path: Path) -> None:
             st.write(candidate["transcript"])
 
     b1, b2, b3, b4 = st.columns(4)
-    if b1.button("✅ Keep", width="stretch"):
-        item.update(status="keep", start=start, end=preview_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
-    if b2.button("❌ Reject", width="stretch"):
-        item.update(status="reject", start=start, end=preview_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
-    if b3.button("↩ Unreview", width="stretch"):
-        item.update(status="unreviewed", start=start, end=preview_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
-    if b4.button("💾 Save timing", width="stretch"):
-        item.update(start=start, end=preview_end, title=title); save_review(db_path, analysis_id, review); st.success("Saved")
+    if b1.button("✅ Keep", width="stretch", disabled=not timing_valid):
+        item.update(status="keep", start=edited_start, end=edited_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
+    if b2.button("❌ Reject", width="stretch", disabled=not timing_valid):
+        item.update(status="reject", start=edited_start, end=edited_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
+    if b3.button("↩ Unreview", width="stretch", disabled=not timing_valid):
+        item.update(status="unreviewed", start=edited_start, end=edited_end, title=title); save_review(db_path, analysis_id, review); st.rerun()
+    if b4.button("💾 Save timing", width="stretch", disabled=not timing_valid):
+        item.update(start=edited_start, end=edited_end, title=title); save_review(db_path, analysis_id, review); st.success("Saved")
 
     st.divider()
     st.subheader("📦 Add to export queue", anchor=False)
