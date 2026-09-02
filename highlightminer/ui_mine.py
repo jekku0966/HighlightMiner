@@ -1016,7 +1016,7 @@ def _render_review(db_path: Path) -> None:
     if candidate_changed:
         st.session_state[_PREVIEW_ACTIVE_KEY] = preview_token
         st.session_state[_PREVIEW_CLOSED_KEY] = False
-        st.session_state[preview_bounds_key] = (original_start, original_end)
+        st.session_state.setdefault(preview_bounds_key, (original_start, original_end))
 
     st.subheader(f"🎞️ {candidate['id']} — {candidate['reason']}", anchor=False)
     with st.form(f"clip_timing_form_{analysis_id}_{candidate['id']}"):
