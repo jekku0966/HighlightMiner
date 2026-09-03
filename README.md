@@ -1,38 +1,14 @@
-# ⛏️ HighlightMiner
+# ⛏️ HighlightMiner v0.1: Legacy MVP
 
-**Local-first VOD highlight detection for streamers and long-form recordings.**
+> **Status:** Legacy / proof of concept. This branch contains the original crude MVP that proved the HighlightMiner workflow was viable. The current actively maintained version is [`v0.2-dev`](https://github.com/jekku0966/HighlightMiner/tree/v0.2-dev).
 
-HighlightMiner scans long VODs for moments worth reviewing. It combines audio excitement, local Whisper transcription, reaction-heavy speech cues, and optional chat bursts into a ranked candidate list. You keep the good ones, reject the garbage, adjust the timing, and export clips locally.
+**TL;DR:** HighlightMiner scans long VODs using audio activity, local Whisper speech cues, and optional chat activity to find moments worth reviewing. You decide what is actually good, adjust the timing if needed, and export the clips you want to keep.
 
-> **Stable branch:** `main` — v0.1.x
->
-> HighlightMiner is a candidate finder, not an omniscient comedy detector. Human taste remains inconveniently necessary.
+## What v0.1 is
 
-## Current interface — `main`
+v0.1 is the original working MVP of HighlightMiner. It is simple, folder-driven, and rough around the edges. Its main purpose was to prove that the workflow works and to give the project a starting point.
 
-![HighlightMiner main branch UX](docs/ux/highlightminer-main-ux-mockup.svg)
-
-This mockup represents the **stable file-based UX implemented on `main`**. It follows the repository's current Streamlit theme and layout rather than inventing a separate concept UI.
-
-The stable sidebar works directly with local files and folders:
-
-- VOD picker
-- optional chat picker
-- content/game label
-- work folder
-- settings file
-- **Analyze VOD**
-- **Existing analysis** loader for `analysis.json`
-
-The main review area shows the analysis overview, ranked candidates, local preview, timing controls, Keep/Reject/Unreview actions, transcript/signal information, and export controls.
-
-### Branch distinction
-
-`main` is deliberately simple and folder-driven. Analysis/review state is stored in generated files such as `analysis.json` and `review.json`.
-
-The experimental [`v0.2-dev`](https://github.com/jekku0966/HighlightMiner/tree/v0.2-dev) branch keeps the same visual language but replaces the **Existing analysis** section with **Analysis history** backed by `highlightminer.db`, plus legacy v0.1 import.
-
-The mockup is representative rather than pixel-for-pixel; Streamlit controls exact spacing and the displayed rows depend on local data.
+If you want the version currently being developed and tested, use [`v0.2-dev`](https://github.com/jekku0966/HighlightMiner/tree/v0.2-dev).
 
 ## What it does
 
@@ -59,35 +35,36 @@ VOD + optional chat
               FFmpeg export
 ```
 
-No cloud API is required for the stable v0.1.x workflow.
+HighlightMiner is a **candidate finder**, not a finished-video editor or an automatic comedy detector. It points you toward moments that may be worth checking. You make the final call.
 
-## Highlights
+## v0.1 workflow
 
-- **Local-first processing** — source VODs are read from disk rather than uploaded through the browser.
-- **GPU Whisper support** — `faster-whisper`/CTranslate2 uses CUDA when available and falls back to CPU.
-- **Optional chat scoring** — JSON, JSONL/NDJSON, and CSV inputs are supported.
-- **Signal fusion** — audio, transcript and chat cues reinforce one another instead of generating separate clip lists.
-- **Context windows** — candidates include pre-roll and post-roll so clips do not begin after the joke already happened.
-- **Human review** — Keep, Reject, Unreview, retime, title, and preview candidate clips.
-- **Accurate export** — final clips are re-encoded for more reliable arbitrary start/end points.
-- **NVENC-first export** — attempts `h264_nvenc` and falls back to `libx264` when necessary.
-- **Portable FFmpeg lookup** — `./bin`, project root, or system `PATH`.
-- **Transparent provenance** — dependencies, external interfaces and AI-assisted development are documented in [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md).
+The v0.1 interface works directly with local files and folders:
 
-## Stable UI flow
+1. Choose a VOD.
+2. Optionally provide a matching chat export.
+3. Choose a work folder and settings file.
+4. Run **Analyze VOD**.
+5. Review the ranked candidate moments.
+6. Keep, Reject, Unreview, retime, or title candidates.
+7. Export kept clips locally with FFmpeg.
 
-1. **Source sidebar** — choose the VOD, optional chat file, content/game label, work folder and settings file.
-2. **Analyze VOD** — extraction, transcription, signal analysis and ranking run locally.
-3. **Existing analysis** — optionally browse back to an existing `analysis.json` from a prior run.
-4. **Analysis overview** — candidate, kept/rejected and detected-language counts.
-5. **Ranked candidates** — score, time range, detection reason and review state.
-6. **Candidate review** — lightweight local preview, editable start/end, title and signal scores.
-7. **Keep / Reject / Unreview** — save the human decision to the file-based review state.
-8. **Export** — render all kept clips to the selected output folder.
+Analysis and review state is stored in generated files such as `analysis.json` and `review.json`.
 
-## Recommended Twitch test workflow
+## Main features
 
-For Twitch VODs, the recommended current testing workflow is to use [TwitchDownloader](https://github.com/lay295/TwitchDownloader) to obtain both the VOD and its matching JSON chat export:
+- **Local-first processing:** VODs stay on disk. No cloud API is required for the normal v0.1 workflow.
+- **Local Whisper transcription:** `faster-whisper`/CTranslate2 can use CUDA when available and fall back to CPU.
+- **Audio scoring:** Detects bursts of audio activity and excitement.
+- **Reaction-phrase scoring:** Transcript cues can strengthen likely highlight moments.
+- **Optional chat scoring:** JSON, JSONL/NDJSON, and CSV chat exports are supported.
+- **Signal fusion:** Audio, transcript, and chat cues contribute to one ranked candidate list.
+- **Human review:** Keep, Reject, Unreview, adjust timing, and title clips.
+- **Local export:** FFmpeg renders the clips you decide to keep.
+
+## Recommended Twitch input workflow
+
+For Twitch testing, [TwitchDownloader](https://github.com/lay295/TwitchDownloader) can be used to get the VOD and matching JSON chat export:
 
 ```text
 TwitchDownloader
@@ -98,21 +75,21 @@ TwitchDownloader
    HighlightMiner
 ```
 
-HighlightMiner does **not** bundle, import or automatically invoke TwitchDownloader. It is a recommended companion/input baseline while the project is young.
+TwitchDownloader is not bundled with HighlightMiner and HighlightMiner does not launch it automatically.
 
 ## Requirements
 
 - Python **3.10+**
 - FFmpeg + ffprobe
-- Windows convenience scripts are included; the Python project itself is not intentionally Windows-only
-- NVIDIA GPU optional but strongly useful for large Whisper models
+- NVIDIA GPU optional but useful for larger Whisper models
+- Windows convenience scripts are included. The Python project itself is not intentionally Windows-only.
 
 Detailed setup docs:
 
 - [`BUILD_WINDOWS.md`](BUILD_WINDOWS.md)
 - [`CUDA_SETUP.md`](CUDA_SETUP.md)
 
-## Quick start — Windows
+## Quick start: Windows
 
 ### 1. Clone
 
@@ -120,6 +97,8 @@ Detailed setup docs:
 git clone https://github.com/jekku0966/HighlightMiner.git
 cd HighlightMiner
 ```
+
+`main` contains the legacy v0.1 MVP.
 
 ### 2. Provide FFmpeg
 
@@ -150,8 +129,6 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\run.bat
 ```
 
-Then choose a VOD, optional matching chat export, work folder and settings file, and click **Analyze VOD**.
-
 ## CLI
 
 Analyze a VOD:
@@ -180,7 +157,7 @@ Export clips marked **Keep**:
 .\.venv\Scripts\python.exe -m highlightminer export ".\highlightminer_work\stream-001\analysis.json"
 ```
 
-## Stable v0.1.x work directory
+## v0.1 work directory
 
 ```text
 highlightminer_work/stream-001/
@@ -194,7 +171,7 @@ highlightminer_work/stream-001/
 └── clips/
 ```
 
-The expensive transcription/features can be reused when reopening an existing analysis.
+The expensive transcription and feature data can be reused when reopening an existing analysis.
 
 ## Chat input
 
@@ -247,38 +224,36 @@ Edit `settings.json`.
 | `weights` | Relative audio/transcript/chat contribution |
 | `reaction_phrases` | User-configurable reaction phrases |
 
-A good rule: tune across several different VODs, not one carefully overfitted disaster.
+## Current version: v0.2
 
-## v0.2 development branch
+The active HighlightMiner version lives on [`v0.2-dev`](https://github.com/jekku0966/HighlightMiner/tree/v0.2-dev).
 
-Active architecture work lives on [`v0.2-dev`](https://github.com/jekku0966/HighlightMiner/tree/v0.2-dev).
+Compared with this MVP, v0.2 adds a native Windows shell, SQLite-backed state and analysis history, same-VOD reruns with reusable analysis data, in-app settings and model controls, stronger review and export handling, better diagnostics, and groundwork for future preference learning.
 
-The development branch moves structured analysis/review state into SQLite, adds analysis history and legacy import, strengthens validation/security, and lays the foundation for learning from Keep/Reject decisions.
+See [`V0.2_DEV.md`](https://github.com/jekku0966/HighlightMiner/blob/v0.2-dev/V0.2_DEV.md) for the current architecture and status.
 
-See [`V0.2_DEV.md`](https://github.com/jekku0966/HighlightMiner/blob/v0.2-dev/V0.2_DEV.md) for the current development notes.
+## v0.1 limitations
 
-## Limitations
-
-The stable version does **not** currently:
+This MVP does **not** currently:
 
 - understand gameplay visually;
-- know whether a joke is actually funny;
-- identify game-specific kills/wins/deaths from the UI;
-- automatically learn your taste yet;
+- know whether a joke or moment is actually good;
+- automatically learn your taste;
 - download Twitch/YouTube VODs itself;
-- publish clips to social platforms.
+- publish clips to social platforms;
+- function as a full video editor.
 
-Treat the ranking as **where should I look first?**, not **the machine has discovered comedy**.
+Treat the ranking as **"where should I look first?"**, not **"the machine has finished my edit."**
 
 ## Provenance and dependencies
 
-HighlightMiner's application-specific implementation was written for this project. It uses documented public interfaces from projects including:
+HighlightMiner uses documented public interfaces from projects including:
 
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
 - [CTranslate2](https://github.com/OpenNMT/CTranslate2)
 - [FFmpeg](https://ffmpeg.org/)
 - [Streamlit](https://streamlit.io/)
-- [TwitchDownloader](https://github.com/lay295/TwitchDownloader) as a recommended input companion, not a runtime dependency
+- [TwitchDownloader](https://github.com/lay295/TwitchDownloader), used as a recommended input companion rather than a runtime dependency
 
 The project was developed with AI coding assistance from OpenAI's ChatGPT. See [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md) for the detailed provenance policy.
 
@@ -289,18 +264,16 @@ The project was developed with AI coding assistance from OpenAI's ChatGPT. See [
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-GitHub Actions runs the test suite on pushes and pull requests.
+## Documentation
 
-## More documentation
-
-- [`BUILD_WINDOWS.md`](BUILD_WINDOWS.md) — Windows packaging/build notes
-- [`CUDA_SETUP.md`](CUDA_SETUP.md) — CUDA/CTranslate2 setup
-- [`CHANGELOG.md`](CHANGELOG.md) — project changes
-- [`RELEASE_NOTES_v0.1.2.md`](RELEASE_NOTES_v0.1.2.md) — stable release notes
-- [`SECURITY.md`](SECURITY.md) — security notes
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution guidelines
-- [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md) — dependencies and provenance
+- [`BUILD_WINDOWS.md`](BUILD_WINDOWS.md): Windows packaging/build notes
+- [`CUDA_SETUP.md`](CUDA_SETUP.md): CUDA/CTranslate2 setup
+- [`CHANGELOG.md`](CHANGELOG.md): project changes
+- [`RELEASE_NOTES_v0.1.2.md`](RELEASE_NOTES_v0.1.2.md): v0.1 release notes
+- [`SECURITY.md`](SECURITY.md): security notes
+- [`CONTRIBUTING.md`](CONTRIBUTING.md): contribution guidelines
+- [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md): dependencies and provenance
 
 ## License
 
-HighlightMiner's own source code is released under the **MIT License**. Third-party software, models and dependencies retain their own licenses.
+HighlightMiner's own source code is released under the **MIT License**. Third-party software, models, and dependencies retain their own licenses.
