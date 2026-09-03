@@ -43,6 +43,7 @@ from .model_access import (
     huggingface_cache_directory,
     load_model_access,
     models_root,
+    resolve_model_reference,
     save_model_access,
     set_model_download_consent,
     validate_local_model_directory,
@@ -308,6 +309,19 @@ def _rerun_source_matches_video(pending: dict, video_path: str) -> bool:
         return Path(stored_path).expanduser().resolve() == Path(current_path).expanduser().resolve()
     except (OSError, RuntimeError):
         return False
+
+
+def _rerun_model_access_blocks_speech(
+    settings: Settings,
+    model_access: ModelAccessPreferences,
+) -> bool:
+    """Return whether the saved policy leaves no usable model for a fresh transcript."""
+    if model_access.download_consent != "deny":
+        return False
+    try:
+        return resolve_model_reference(settings, model_access) is None
+    except (OSError, ValueError):
+        return True
 
 
 def _analysis_delete_confirmation_matches(analysis_id: str, entered: str) -> bool:
@@ -800,11 +814,11 @@ def _render_analysis_controls(
         "reuses only matching evidence. **Force full reprocess** ignores all prior evidence."
     )
     model_access = load_model_access(db_path)
-    if model_access.download_consent == "deny" and not model_access.local_model_path:
+    if _rerun_model_access_blocks_speech(load_app_settings(db_path), model_access):
         st.warning(
             "Speech recognition may be skipped: Model access is set to **Never download models** "
-            "and no local model is selected. Change it under **Settings → Analysis engine → "
-            "Model access** before reprocessing if you want a fresh transcript."
+            "and no usable selected or cached model is available. Change it under **Settings → "
+            "Analysis engine → Model access** before reprocessing if you want a fresh transcript."
         )
     r1, r2, r3 = st.columns(3)
     if r1.button("Load latest", width="stretch", disabled=latest is None):

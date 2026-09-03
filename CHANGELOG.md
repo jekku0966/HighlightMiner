@@ -6,6 +6,7 @@ All notable changes to HighlightMiner will be documented here.
 
 ### Fixed
 
+- The rerun warning now checks the configured Whisper model cache and validates any selected local model before warning that **Never download models** may skip speech recognition.
 - Rerun and completed-analysis screens now explain when the saved **Never download models** policy prevents a fresh transcript and point directly to the setting required to restore speech recognition.
 - Clip preview start/end fields now use `MM:SS` or `HH:MM:SS` timestamps instead of raw source seconds, with validated editing that preserves untouched internal boundaries.
 - Fixed the missing-model decision buttons so downloading, choosing a local model, or continuing without speech resumes the waiting analysis job instead of reopening the same prompt.

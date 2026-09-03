@@ -11,7 +11,12 @@ from highlightminer.analysis_jobs import (
     start_analysis_job,
 )
 from highlightminer.config import Settings
-from highlightminer.model_access import ModelDecisionRequired, load_model_access
+from highlightminer.model_access import (
+    ModelAccessPreferences,
+    ModelDecisionRequired,
+    PreparedModelReference,
+    load_model_access,
+)
 from highlightminer.storage import register_source
 from highlightminer.ui_common import (
     hydrate_persistent_widget,
@@ -101,6 +106,53 @@ def test_rerun_choice_stays_bound_to_the_original_vod(tmp_path: Path) -> None:
     assert ui_mine._rerun_source_matches_video(pending, str(original)) is True
     assert ui_mine._rerun_source_matches_video(pending, str(replacement)) is False
     assert ui_mine._rerun_source_matches_video(pending, "") is False
+
+
+def test_rerun_model_warning_is_suppressed_for_cached_model(monkeypatch) -> None:
+    settings = Settings(whisper_model="large-v3")
+    access = ModelAccessPreferences(download_consent="deny")
+    cached = PreparedModelReference(
+        reference="cached-model",
+        local_files_only=True,
+        source="cache",
+        display_name="large-v3",
+    )
+    monkeypatch.setattr(
+        ui_mine,
+        "resolve_model_reference",
+        lambda actual_settings, actual_access: cached,
+    )
+
+    assert ui_mine._rerun_model_access_blocks_speech(settings, access) is False
+
+
+def test_rerun_model_warning_is_shown_for_denied_uncached_model(monkeypatch) -> None:
+    settings = Settings(whisper_model="large-v3")
+    access = ModelAccessPreferences(download_consent="deny")
+    monkeypatch.setattr(
+        ui_mine,
+        "resolve_model_reference",
+        lambda actual_settings, actual_access: None,
+    )
+
+    assert ui_mine._rerun_model_access_blocks_speech(settings, access) is True
+
+
+def test_rerun_model_warning_is_shown_for_stale_local_model(monkeypatch) -> None:
+    settings = Settings(whisper_model="large-v3")
+    access = ModelAccessPreferences(
+        download_consent="deny",
+        local_model_path="missing-local-model",
+    )
+    monkeypatch.setattr(
+        ui_mine,
+        "resolve_model_reference",
+        lambda actual_settings, actual_access: (_ for _ in ()).throw(
+            FileNotFoundError("model moved")
+        ),
+    )
+
+    assert ui_mine._rerun_model_access_blocks_speech(settings, access) is True
 
 
 def test_disabled_model_download_notice_explains_how_to_restore_speech() -> None:
