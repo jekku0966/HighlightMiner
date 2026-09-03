@@ -181,6 +181,21 @@ Supported containers:
 - JSONL / NDJSON
 - CSV
 
+Common timestamp fields include:
+
+```text
+content_offset_seconds
+video_offset
+offset_seconds
+timestamp_seconds
+seconds
+timestamp
+time
+offset
+```
+
+Common message fields include `body`, `message`, `text`, and `content`.
+
 Minimal CSV:
 
 ```csv
