@@ -103,6 +103,25 @@ def test_rerun_choice_stays_bound_to_the_original_vod(tmp_path: Path) -> None:
     assert ui_mine._rerun_source_matches_video(pending, "") is False
 
 
+def test_disabled_model_download_notice_explains_how_to_restore_speech() -> None:
+    notice = ui_mine._transcription_skip_notice(
+        {"status": "skipped", "reason": "model_downloads_disabled"}
+    )
+
+    assert "Never download models" in notice
+    assert "Settings → Analysis engine → Model access" in notice
+    assert "Force full reprocess" in notice
+
+
+def test_requested_no_speech_notice_does_not_blame_model_access() -> None:
+    notice = ui_mine._transcription_skip_notice(
+        {"status": "skipped", "reason": "user_requested_no_transcription"}
+    )
+
+    assert "disabled for this run" in notice
+    assert "Never download models" not in notice
+
+
 def test_empty_source_keeps_analysis_action_disabled(monkeypatch, tmp_path: Path) -> None:
     state: dict[str, object] = {}
     buttons: list[tuple[str, bool]] = []
