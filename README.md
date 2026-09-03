@@ -1,75 +1,109 @@
-# ⛏️ HighlightMiner v0.2-dev
+# ⛏️ HighlightMiner v0.2
 
-**Experimental local-first VOD highlight detection with SQLite history, same-VOD reruns, in-app settings, a native Windows shell, and future preference learning in mind.**
+> **Status:** Current actively maintained version. Development and testing happen on `v0.2-dev`. v0.1 on `main` is the original crude MVP / proof of concept and is kept mainly for history and reference.
 
-> Development branch: `v0.2-dev` — version `0.2.0.dev0`  
-> Stable/simple v0.1.x remains on `main`.
+**TL;DR:** HighlightMiner scans long VODs and ranks moments that are likely worth reviewing using audio activity, optional local Whisper speech cues, and optional chat activity. You decide what is worth keeping, adjust the timing if needed, and export the clips locally.
 
-HighlightMiner analyzes long VODs using audio excitement, optional local Whisper transcription, reaction-heavy speech cues when transcription is available, and optional chat bursts, then presents ranked candidate moments for human review.
+## What HighlightMiner does
+
+```text
+VOD + optional chat
+        │
+        ├── audio analysis
+        ├── optional local Whisper transcription
+        ├── reaction-phrase scoring
+        └── optional chat-burst scoring
+                    │
+                    ▼
+              signal fusion
+                    │
+                    ▼
+          ranked candidate moments
+                    │
+                    ▼
+             human review
+          Keep / Reject / retime
+                    │
+                    ▼
+              FFmpeg export
+```
+
+The goal is simple: turn hours of VOD into a much smaller ranked list of moments that are actually worth checking.
+
+HighlightMiner keeps the human in control. It suggests where to look first. You decide what is good, fix the clip boundaries, name it, and choose whether it gets exported.
+
+It is not a full video editor and it does not try to make the creative decision for you.
+
+## v0.2 at a glance
+
+Compared with the original v0.1 MVP, v0.2 is the current application architecture. It adds:
+
+- a native Windows desktop shell around the local Streamlit UI;
+- SQLite-backed analyses, review state, settings, history, and export data;
+- same-VOD reruns with reusable analysis data;
+- in-app analysis settings and model controls;
+- explicit local-model, model-download, and no-transcription choices;
+- persistent Keep / Reject / Unreviewed decisions;
+- editable clip timing and titles;
+- a persistent export queue and export history;
+- analysis deletion with an impact preview and explicit confirmation;
+- better diagnostics, timing, cancellation, and shutdown behavior;
+- data plumbing for future preference learning while keeping the user in control.
+
+v0.2 is still under active testing, so bugs and rough edges are possible. The `-dev` branch name is there for a reason, but this is the version that represents HighlightMiner today.
 
 ## Windows desktop UI
 
-On Windows, Streamlit is hosted inside a native HighlightMiner window using pywebview + Microsoft Edge WebView2. Double-clicking `HighlightMiner.exe` does not need to open a normal browser tab. Closing the native window or using **Exit HighlightMiner** shuts down the local Streamlit process when no non-cancellable analysis/export stage is active; active work keeps shutdown locked until it reaches a safe state.
+On Windows, Streamlit runs inside a native HighlightMiner window using pywebview and Microsoft Edge WebView2. Running `HighlightMiner.exe` opens the application directly instead of requiring a normal browser tab.
 
-Browser fallback remains available:
+Browser fallback is still available:
 
 ```powershell
 HighlightMiner.exe ui --browser
 ```
 
-## Official Windows binaries
+Closing the native window or using **Exit HighlightMiner** shuts down the local Streamlit process when it is safe to do so. Active non-cancellable analysis or export stages keep shutdown locked until they reach a safe state.
 
-Ordinary GitHub Actions runs build and smoke-test the frozen Windows application for regression coverage, but they do **not** publish a downloadable EXE or ZIP artifact.
+## Local-first processing
 
-Official HighlightMiner Windows binaries are only the assets manually attached by the maintainer to the repository's **GitHub Releases** page. Official releases include a versioned Windows ZIP, `SHA256SUMS.txt`, and `RELEASE_MANIFEST.json`; GitHub provides source-code ZIP/tar.gz archives automatically from the release tag.
+HighlightMiner is designed around local media processing:
 
-Because HighlightMiner is open source, third parties can still build their own executables from the public source. Those builds are not official HighlightMiner binaries unless they are published as release assets by the maintainer.
+- source VODs are read from disk;
+- FFmpeg handles media extraction and export;
+- Whisper runs locally through `faster-whisper`/CTranslate2 when speech recognition is enabled;
+- analysis and review state is stored locally in SQLite;
+- no cloud inference API is required for the normal workflow.
+
+For Twitch VOD and chat acquisition, [TwitchDownloader](https://github.com/lay295/TwitchDownloader) is the recommended companion tool. It is not bundled with HighlightMiner and HighlightMiner does not launch it automatically.
 
 ## SQLite-backed application state
 
-v0.2 keeps structured state in `highlightminer.db`: analyses, candidates, transcript/audio/chat features, source/run history, Keep/Reject/Unreviewed reviews, timing/title edits, review events, the persistent export queue and export history, and the active desktop-app settings profile.
+v0.2 stores structured state in `highlightminer.db`, including:
 
-Completed analyses are immutable history entries. A selected run can be permanently deleted only through an impact preview and explicit confirmation; its candidates, evidence, review/learning labels, database export history, and queue entries are removed together. Other runs remain unchanged, source run numbers are never reused, and already exported video files stay on disk. History remains global while the current-VOD-versus-global presentation question is evaluated with testers.
+- source VOD identity and run history;
+- analyses and ranked candidates;
+- transcript, audio, and chat features;
+- Keep / Reject / Unreviewed reviews;
+- timing and title edits;
+- review events;
+- persistent export queue and export history;
+- the active desktop-app settings profile.
 
 ```text
 HighlightMiner/
 ├── HighlightMiner.exe
 ├── highlightminer.db
-├── settings.json        # migration/default/interchange file; not normal UI state
+├── settings.json        # migration/default/interchange file
 └── highlightminer_work/
     ├── .previews/
     └── clips/
 ```
 
-New analyses no longer need durable `analysis.json`, `review.json`, `transcript.json`, `audio_features.json`, or `chat_features.json` files. The temporary 16 kHz analysis WAV is deleted after useful data is committed.
-
-## In-app Settings page
-
-Use **⚙️ Settings** in the sidebar instead of hand-editing JSON. The page provides:
-
-- Whisper model/device/compute/language/beam/VAD controls;
-- explicit recognition-model download permission and local-model selection;
-- candidate threshold/count and clip timing controls;
-- audio analysis window/hop controls;
-- `0.00–1.00` Audio / Transcript / Chat weight sliders with effective normalized percentages;
-- editable reaction phrases;
-- **Save settings**, **Reset defaults**, **Import settings**, and **Export settings**.
-
-HighlightMiner never silently opts the user into downloading a speech-recognition model. A fresh database starts at **Ask before any download**, but the app does not interrupt startup. When a new analysis actually needs a fresh transcript, HighlightMiner first tries a manually selected local model and an already cached model without networking. Only if neither is available does the Mine page ask the user to **Download model**, **Choose local model**, or **Continue without speech**.
-
-Choosing **Continue without speech** remembers **Never download models** in SQLite and completes the analysis with audio plus optional chat instead of making the rest of the app unusable. The preference can be changed later under **Settings → Analysis engine → Model access**. Imported settings files cannot grant model-download permission. A manually selected CTranslate2 Whisper model works without granting download permission.
-
-Signal presets are **Balanced**, **Reaction-heavy**, **Chat-heavy**, and **Audio-heavy**. Selecting one fills the weight sliders immediately; the single **Save analysis settings** action persists the editor. Presets alter weights only and never secretly change Whisper, thresholds, or clip timing. Manual edits become **Custom** unless the resulting weights match a built-in preset, in which case that preset name is restored. Unavailable signals receive zero effective weight and the remaining signals are renormalized automatically. If every configured weight for the remaining signals was zero, HighlightMiner falls back to equal weighting across the signals that actually exist.
-
-On the first database-backed settings load, HighlightMiner imports the local/package `settings.json` once so existing defaults/reaction phrases survive migration. SQLite is authoritative after that. JSON remains available for backup, sharing, and explicit import/export.
-
-Saved changes affect future analyses/reruns only. Every existing analysis retains its original settings snapshot.
-
-See `SETTINGS.md` for the complete settings contract.
+Completed analyses are kept as history entries. A selected analysis can only be permanently deleted after an impact preview and explicit confirmation. Other runs stay untouched, source run numbers are not reused, and already exported video files are not silently deleted from disk.
 
 ## Same VOD, multiple runs
 
-v0.2 separates a physical source VOD from its analysis runs:
+v0.2 separates the physical source VOD from its analysis runs:
 
 ```text
 source VOD
@@ -78,54 +112,80 @@ source VOD
 └── run 3
 ```
 
-A sampled content fingerprint recognizes a byte-identical VOD without relying on filename/path. When a VOD already has history, the UI offers **Load latest**, **Analyze again**, and **Force full reprocess**.
+A sampled content fingerprint recognizes a byte-identical VOD without relying only on its filename or path.
 
-Candidate ranking always runs again. Compatible audio features, Whisper transcript, and chat features are reused independently. Changing only scoring settings can therefore reduce a rerun to a quick rerank. Changing reaction phrases reuses compatible Whisper text and rescoring does not require retranscription.
+When HighlightMiner recognizes a VOD with existing history, the UI can offer:
 
-A run that deliberately skips speech recognition records that status but does **not** save the empty transcript under the normal Whisper cache signature. That prevents a no-transcript run from shadowing an older valid reusable transcript.
+- **Load latest:** Reopen the latest existing analysis.
+- **Analyze again:** Create a new run while reusing compatible analysis data.
+- **Force full reprocess:** Rebuild the analysis from scratch.
 
-```powershell
-HighlightMiner.exe analyze "D:\VODs\stream.mp4" --no-reuse
-```
+Candidate ranking always runs again. Compatible audio features, Whisper transcript, and chat features can be reused independently, so changing only scoring settings can avoid unnecessary retranscription.
 
-The CLI is non-interactive for model consent. For a missing model, explicitly choose one of these per-command modes:
+## Speech recognition and model access
+
+Whisper transcription is optional.
+
+HighlightMiner does not silently opt the user into downloading a speech-recognition model. When a new analysis needs transcription, it can use:
+
+1. a manually selected local CTranslate2 Whisper model;
+2. an already cached supported model;
+3. an explicitly approved model download;
+4. **Continue without speech**, which finishes the analysis using the signals that are still available.
+
+The preference can be changed later under **Settings → Analysis engine → Model access**.
+
+Imported settings cannot silently grant model-download permission.
+
+The CLI is intentionally non-interactive for model consent. If a model is missing, choose explicitly:
 
 ```powershell
 HighlightMiner.exe analyze "D:\VODs\stream.mp4" --allow-model-download
 HighlightMiner.exe analyze "D:\VODs\stream.mp4" --no-transcription
 ```
 
-These flags do not silently change the normal desktop download preference.
+These per-command flags do not silently rewrite the normal desktop preference.
 
-See `RERUNS_AND_LEARNING.md` for source identity/cache rules.
+## In-app settings
 
-## Learning-ready review history
+Use **⚙️ Settings** in the sidebar instead of manually editing JSON for normal use.
 
-Review semantics are explicit:
+Current controls include:
 
-| State | Future label |
-|---|---:|
-| Keep | `1` positive |
-| Reject | `0` negative |
-| Unreviewed | unlabeled |
+- Whisper model, device, compute type, language, beam, and VAD options;
+- model-download permission and local-model selection;
+- candidate threshold/count and clip timing controls;
+- audio analysis window/hop controls;
+- Audio / Transcript / Chat weighting;
+- editable reaction phrases;
+- settings reset, import, and export.
 
-Unreviewed is **not** silently treated as Reject. Candidate feature snapshots, original ranking scores, content/game labels, run/source IDs, settings snapshots, review changes, timing edits, titles, exports, signal availability, and effective scoring weights are retained for future preference-learning experiments.
+Signal presets include **Balanced**, **Reaction-heavy**, **Chat-heavy**, and **Audio-heavy**. Unavailable signals get zero effective weight and the remaining available signals are renormalized automatically.
 
-```powershell
-HighlightMiner.exe learning-stats
-```
+Saved settings affect future analyses and reruns. Existing analyses keep their original settings snapshot.
 
-The dataset plumbing exists; the actual personal preference learner is not implemented on this branch.
+See [`SETTINGS.md`](SETTINGS.md) for the complete settings contract.
 
 ## Review and export
 
-The Mine / Review page provides local VOD/chat/work-folder pickers, Content/Game, source-aware history, v0.1 import, candidate previews, Keep/Reject/Unreview, timing/title editing, transcript/signal context, and a persistent export queue.
+The Mine / Review workflow includes:
 
-Kept clips can be staged before FFmpeg starts. Queue entries survive Streamlit reruns, reject duplicates, expose per-item and overall status, retain failures for retry, and record successful outputs in export history. A custom clip title becomes the clean filename; untitled clips use the candidate ID.
+- local VOD, chat, and work-folder selection;
+- content/game labeling;
+- source-aware analysis history;
+- v0.1 import;
+- ranked candidate review;
+- local preview;
+- Keep / Reject / Unreviewed state;
+- timing and title editing;
+- transcript and signal context;
+- a persistent export queue.
 
-Candidate, preview, and export-queue timestamps share one human-readable display format: whole seconds omit `.000`, and fractional seconds omit redundant trailing zeroes. Stored review boundaries and the numeric values passed to preview/export remain unchanged.
+Kept clips can be staged before FFmpeg starts. Queue entries survive Streamlit reruns, reject duplicates, show per-item and overall status, retain failures for retry, and record successful outputs in export history.
 
-Exports use sanitized category folders and never silently overwrite an existing file:
+A custom clip title becomes the clean filename. Untitled clips fall back to the candidate ID.
+
+Exports use sanitized category folders and do not silently overwrite an existing file:
 
 ```text
 clips/
@@ -134,25 +194,39 @@ clips/
     └── clutch_2.mp4
 ```
 
+## Learning-ready review history
+
+Review states are explicit:
+
+| Review state | Future label |
+|---|---:|
+| Keep | `1` positive |
+| Reject | `0` negative |
+| Unreviewed | unlabeled |
+
+Unreviewed is **not** silently treated as Reject.
+
+Candidate feature snapshots, ranking scores, content/game labels, source/run IDs, settings snapshots, review changes, timing edits, titles, exports, signal availability, and effective scoring weights are kept so future preference-learning experiments have usable data.
+
+```powershell
+HighlightMiner.exe learning-stats
+```
+
+The data plumbing exists. A personal preference learner is **not** part of the current v0.2 behavior, and human decisions remain authoritative.
+
 ## Legacy v0.1 import
 
-Use **Import v0.1 analysis.json** in the sidebar. HighlightMiner migrates the analysis and, when present, companion review/transcript/audio/chat data into SQLite. The referenced source VOD must still exist locally.
+v0.2 can import an old v0.1 `analysis.json` and, when available, its companion review, transcript, audio, and chat data into SQLite. The referenced source VOD must still exist locally.
 
-## Security posture
-
-The dev branch includes local-file validation, automatic UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, just-in-time model-download consent, local-only cached/manual model loading, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, validation-only public Windows CI, and SHA-256/manifest provenance for official release assets.
-
-The sampled VOD fingerprint is for source identity, not security/integrity verification. See `SECURITY.md`.
+The v0.1 branch remains available on [`main`](https://github.com/jekku0966/HighlightMiner/tree/main), but it should be treated as the legacy MVP rather than the current HighlightMiner experience.
 
 ## Requirements
 
-- Python 3.10+ for source mode
+- Python **3.10+** for source mode
 - FFmpeg + ffprobe
 - Windows x64 for the current packaged target
 - Microsoft Edge WebView2 Runtime for the native window
 - NVIDIA GPU optional but useful for larger Whisper models
-
-For Twitch VOD/chat acquisition, TwitchDownloader is the recommended companion tool; it is not bundled or invoked automatically.
 
 ## Running from source
 
@@ -165,22 +239,58 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\run.bat
 ```
 
-Tests:
+Run the tests with:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
+## Official Windows binaries
+
+Normal GitHub Actions runs can build and smoke-test the frozen Windows application for regression coverage, but they do **not** automatically make every CI build an official downloadable release.
+
+Official Windows binaries are the assets published by the maintainer on the repository's **GitHub Releases** page. Release packages can include the versioned Windows ZIP, `SHA256SUMS.txt`, and `RELEASE_MANIFEST.json` alongside GitHub's automatically generated source archives.
+
+Third parties can build the open-source application themselves, but those builds are not official HighlightMiner binaries unless the maintainer publishes them as release assets.
+
+## Security posture
+
+v0.2 includes local-file validation, UNC/network-source rejection, chat/settings size limits, JSON nesting limits, numeric settings validation, standard Whisper-model allow-listing with explicit custom-model opt-in, just-in-time model-download consent, loopback-only Streamlit, forced WebView2 rendering, pinned GitHub Actions, and release checksum/manifest support.
+
+The sampled VOD fingerprint is used for source identity, not cryptographic integrity verification.
+
+See [`SECURITY.md`](SECURITY.md) for details.
+
+## Current limitations
+
+HighlightMiner does **not** currently:
+
+- understand gameplay visually;
+- know whether a joke or moment is actually good;
+- automatically produce a finished edited video;
+- replace the human review step;
+- automatically learn and override your taste;
+- download Twitch/YouTube VODs itself;
+- publish clips directly to social platforms.
+
+Treat the ranking as **"where should I look first?"**, not **"the edit is finished."**
+
 ## Documentation
 
-- `SETTINGS.md` — in-app settings, model access, presets, import/export
-- `V0.2_DEV.md` — architecture/status
-- `RERUNS_AND_LEARNING.md` — rerun/cache/learning contract
-- `BUILD_WINDOWS.md` — Windows build/package notes
-- `CUDA_SETUP.md` — CUDA/CTranslate2 setup
-- `SECURITY.md` — threat model/security notes
-- `CHANGELOG.md` — project changes
-- `ATTRIBUTIONS.md` — dependency/provenance notes
+- [`SETTINGS.md`](SETTINGS.md): settings, model access, presets, import/export
+- [`V0.2_DEV.md`](V0.2_DEV.md): architecture and current development status
+- [`RERUNS_AND_LEARNING.md`](RERUNS_AND_LEARNING.md): source identity, cache, rerun, and learning contract
+- [`BUILD_WINDOWS.md`](BUILD_WINDOWS.md): Windows build/package notes
+- [`CUDA_SETUP.md`](CUDA_SETUP.md): CUDA/CTranslate2 setup
+- [`SECURITY.md`](SECURITY.md): threat model and security notes
+- [`CHANGELOG.md`](CHANGELOG.md): project changes
+- [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md): dependency and provenance notes
 
-HighlightMiner's own source is MIT licensed. Third-party dependencies/models retain their own licenses. The project has been developed with AI coding assistance and should be reviewed/tested like any human-authored code.
+## Provenance and license
+
+HighlightMiner uses projects including `faster-whisper`, CTranslate2, FFmpeg, Streamlit, pywebview, and Microsoft Edge WebView2 through their documented interfaces. TwitchDownloader is a recommended input companion rather than a runtime dependency.
+
+The project has been developed with AI coding assistance from OpenAI's ChatGPT and should be reviewed and tested like any human-authored code. See [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md) for provenance details.
+
+HighlightMiner's own source code is released under the **MIT License**. Third-party software, models, and dependencies retain their own licenses.
