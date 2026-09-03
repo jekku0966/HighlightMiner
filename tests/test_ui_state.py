@@ -138,6 +138,23 @@ def test_rerun_model_warning_is_shown_for_denied_uncached_model(monkeypatch) -> 
     assert ui_mine._rerun_model_access_blocks_speech(settings, access) is True
 
 
+def test_rerun_model_warning_is_shown_for_stale_local_model(monkeypatch) -> None:
+    settings = Settings(whisper_model="large-v3")
+    access = ModelAccessPreferences(
+        download_consent="deny",
+        local_model_path="missing-local-model",
+    )
+    monkeypatch.setattr(
+        ui_mine,
+        "resolve_model_reference",
+        lambda actual_settings, actual_access: (_ for _ in ()).throw(
+            FileNotFoundError("model moved")
+        ),
+    )
+
+    assert ui_mine._rerun_model_access_blocks_speech(settings, access) is True
+
+
 def test_disabled_model_download_notice_explains_how_to_restore_speech() -> None:
     notice = ui_mine._transcription_skip_notice(
         {"status": "skipped", "reason": "model_downloads_disabled"}

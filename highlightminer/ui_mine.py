@@ -316,9 +316,12 @@ def _rerun_model_access_blocks_speech(
     model_access: ModelAccessPreferences,
 ) -> bool:
     """Return whether the saved policy leaves no usable model for a fresh transcript."""
-    if model_access.download_consent != "deny" or model_access.local_model_path:
+    if model_access.download_consent != "deny":
         return False
-    return resolve_model_reference(settings, model_access) is None
+    try:
+        return resolve_model_reference(settings, model_access) is None
+    except (OSError, ValueError):
+        return True
 
 
 def _analysis_delete_confirmation_matches(analysis_id: str, entered: str) -> bool:
@@ -814,7 +817,7 @@ def _render_analysis_controls(
     if _rerun_model_access_blocks_speech(load_app_settings(db_path), model_access):
         st.warning(
             "Speech recognition may be skipped: Model access is set to **Never download models** "
-            "and no compatible local or cached model was found. Change it under **Settings → "
+            "and no usable selected or cached model is available. Change it under **Settings → "
             "Analysis engine → Model access** before reprocessing if you want a fresh transcript."
         )
     r1, r2, r3 = st.columns(3)
